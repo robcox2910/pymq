@@ -143,17 +143,17 @@ Full documentation with kid-friendly explanations of every concept:
 
 PyMQ is part of a series of educational "build it from scratch" projects:
 
-| Project | What it builds |
-|---------|---------------|
-| [PyOS](https://github.com/robcox2910/pyos) | An operating system |
-| [Pebble](https://github.com/robcox2910/pebble) | A programming language |
-| [PyDB](https://github.com/robcox2910/pydb) | A SQL database |
-| [PyStack](https://github.com/robcox2910/pystack) | An integration platform |
-| [PyWeb](https://github.com/robcox2910/pyweb) | An HTTP framework |
-| [PyGit](https://github.com/robcox2910/pygit) | A version control system |
-| [PyCrypt](https://github.com/robcox2910/pycrypt) | A cryptography library |
-| [PyNet](https://github.com/robcox2910/pynet) | A network stack |
-| [PySearch](https://github.com/robcox2910/pysearch) | A search engine |
+| Project | What It Teaches |
+|---------|----------------|
+| [PyOS](https://github.com/robcox2910/py-os) | Operating systems |
+| [Pebble](https://github.com/robcox2910/pebble-lang) | Compilers and programming languages |
+| [PyDB](https://github.com/robcox2910/pydb) | Relational databases |
+| [PyStack](https://github.com/robcox2910/pystack) | Full-stack integration |
+| [PyWeb](https://github.com/robcox2910/pyweb) | HTTP web servers |
+| [PyGit](https://github.com/robcox2910/pygit) | Version control |
+| [PyCrypt](https://github.com/robcox2910/pycrypt) | Cryptography |
+| [PyNet](https://github.com/robcox2910/pynet) | Networking |
+| [PySearch](https://github.com/robcox2910/pysearch) | Full-text search |
 
 ## License
 
