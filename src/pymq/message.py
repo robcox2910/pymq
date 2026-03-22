@@ -2,7 +2,7 @@
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 @dataclass
@@ -39,6 +39,6 @@ def create_message(body: str, priority: int = 0) -> Message:
     return Message(
         id=str(uuid.uuid4()),
         body=body,
-        timestamp=datetime.now(tz=timezone.utc).isoformat(),
+        timestamp=datetime.now(tz=UTC).isoformat(),
         priority=priority,
     )
