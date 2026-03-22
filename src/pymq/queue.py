@@ -1,19 +1,20 @@
 """Queues are like bakery counters -- messages line up and wait."""
 
-from __future__ import annotations
-
 import heapq
+from abc import ABC, abstractmethod
 from collections import deque
 
 from pymq.message import Message, create_message
 
 
-class MessageQueue:
-    """FIFO message queue with acknowledgment and dead-letter support.
+class BaseMessageQueue(ABC):
+    """Shared foundation for all message queues.
 
-    Messages are dequeued in the order they were enqueued. A consumer
-    must acknowledge each message; rejected messages are requeued up to
-    ``max_retries`` times before moving to the dead-letter queue.
+    Think of this as the blueprint for a bakery counter. Every counter
+    needs a name sign, a way to hand out tickets (messages), and a
+    spot for unclaimed orders (the dead-letter shelf). Subclasses
+    decide *how* the line is ordered -- first-come-first-served or
+    by priority.
 
     Args:
         name: Human-readable queue name.
@@ -21,13 +22,12 @@ class MessageQueue:
 
     """
 
-    __slots__ = ("_dead_letters", "_in_flight", "_max_retries", "_messages", "_name")
+    __slots__ = ("_dead_letters", "_in_flight", "_max_retries", "_name")
 
     def __init__(self, name: str, max_retries: int = 3) -> None:
         """Create a new message queue."""
         self._name = name
         self._max_retries = max_retries
-        self._messages: deque[Message] = deque()
         self._in_flight: dict[str, Message] = {}
         self._dead_letters: deque[Message] = deque()
 
@@ -37,30 +37,29 @@ class MessageQueue:
         return self._name
 
     @property
+    @abstractmethod
     def size(self) -> int:
         """Return the number of messages waiting in the queue."""
-        return len(self._messages)
 
     @property
     def dead_letter_count(self) -> int:
         """Return the number of messages in the dead-letter queue."""
         return len(self._dead_letters)
 
+    @abstractmethod
     def put(self, body: str, priority: int = 0) -> Message:
         """Create a message and add it to the queue.
 
         Args:
             body: The message content.
-            priority: Priority level (ignored in FIFO queue, kept for API compatibility).
+            priority: Priority level (lower number = higher priority).
 
         Returns:
             The newly created message.
 
         """
-        msg = create_message(body, priority=priority)
-        self._messages.append(msg)
-        return msg
 
+    @abstractmethod
     def get(self) -> Message | None:
         """Dequeue the next message and mark it as in-flight.
 
@@ -68,11 +67,18 @@ class MessageQueue:
             The next message, or None if the queue is empty.
 
         """
-        if not self._messages:
-            return None
-        msg = self._messages.popleft()
-        self._in_flight[msg.id] = msg
-        return msg
+
+    @abstractmethod
+    def _requeue(self, msg: Message) -> None:
+        """Put a rejected message back into the queue.
+
+        Each subclass decides where the message goes based on its
+        ordering strategy.
+
+        Args:
+            msg: The message to requeue.
+
+        """
 
     def acknowledge(self, msg: Message) -> None:
         """Permanently remove an in-flight message.
@@ -98,7 +104,7 @@ class MessageQueue:
         if msg.retries > self._max_retries:
             self._dead_letters.append(msg)
         else:
-            self._messages.append(msg)
+            self._requeue(msg)
 
     def get_dead_letter(self) -> Message | None:
         """Dequeue the next message from the dead-letter queue.
@@ -112,11 +118,13 @@ class MessageQueue:
         return self._dead_letters.popleft()
 
 
-class PriorityMessageQueue:
-    """Priority-based message queue with acknowledgment and dead-letter support.
+class MessageQueue(BaseMessageQueue):
+    """FIFO message queue -- first in, first out.
 
-    Messages are dequeued by priority (lowest number first). Messages with
-    equal priority are returned in FIFO order.
+    Like a bakery line: whoever arrives first gets served first.
+    A consumer must acknowledge each message; rejected messages are
+    requeued up to ``max_retries`` times before moving to the
+    dead-letter queue.
 
     Args:
         name: Human-readable queue name.
@@ -124,31 +132,81 @@ class PriorityMessageQueue:
 
     """
 
-    __slots__ = ("_counter", "_dead_letters", "_in_flight", "_max_retries", "_messages", "_name")
+    __slots__ = ("_messages",)
 
     def __init__(self, name: str, max_retries: int = 3) -> None:
-        """Create a new priority message queue."""
-        self._name = name
-        self._max_retries = max_retries
-        self._messages: list[tuple[int, int, Message]] = []
-        self._in_flight: dict[str, Message] = {}
-        self._dead_letters: deque[Message] = deque()
-        self._counter = 0
-
-    @property
-    def name(self) -> str:
-        """Return the queue name."""
-        return self._name
+        """Create a new FIFO message queue."""
+        super().__init__(name, max_retries)
+        self._messages: deque[Message] = deque()
 
     @property
     def size(self) -> int:
         """Return the number of messages waiting in the queue."""
         return len(self._messages)
 
+    def put(self, body: str, priority: int = 0) -> Message:
+        """Create a message and add it to the back of the line.
+
+        Args:
+            body: The message content.
+            priority: Ignored in FIFO queue, kept for API compatibility.
+
+        Returns:
+            The newly created message.
+
+        """
+        msg = create_message(body, priority=priority)
+        self._messages.append(msg)
+        return msg
+
+    def get(self) -> Message | None:
+        """Dequeue the next message and mark it as in-flight.
+
+        Returns:
+            The next message, or None if the queue is empty.
+
+        """
+        if not self._messages:
+            return None
+        msg = self._messages.popleft()
+        self._in_flight[msg.id] = msg
+        return msg
+
+    def _requeue(self, msg: Message) -> None:
+        """Put a rejected message back at the end of the line.
+
+        Args:
+            msg: The message to requeue.
+
+        """
+        self._messages.append(msg)
+
+
+class PriorityMessageQueue(BaseMessageQueue):
+    """Priority-based message queue -- most urgent first.
+
+    Like an emergency room: patients with higher urgency (lower
+    priority number) get seen before those who arrived earlier.
+    Messages with equal priority are returned in FIFO order.
+
+    Args:
+        name: Human-readable queue name.
+        max_retries: Maximum requeue attempts before dead-lettering.
+
+    """
+
+    __slots__ = ("_counter", "_messages")
+
+    def __init__(self, name: str, max_retries: int = 3) -> None:
+        """Create a new priority message queue."""
+        super().__init__(name, max_retries)
+        self._messages: list[tuple[int, int, Message]] = []
+        self._counter = 0
+
     @property
-    def dead_letter_count(self) -> int:
-        """Return the number of messages in the dead-letter queue."""
-        return len(self._dead_letters)
+    def size(self) -> int:
+        """Return the number of messages waiting in the queue."""
+        return len(self._messages)
 
     def put(self, body: str, priority: int = 0) -> Message:
         """Create a message and add it to the priority queue.
@@ -179,37 +237,12 @@ class PriorityMessageQueue:
         self._in_flight[msg.id] = msg
         return msg
 
-    def acknowledge(self, msg: Message) -> None:
-        """Permanently remove an in-flight message.
+    def _requeue(self, msg: Message) -> None:
+        """Put a rejected message back into the heap at its original priority.
 
         Args:
-            msg: The message to acknowledge.
+            msg: The message to requeue.
 
         """
-        self._in_flight.pop(msg.id, None)
-
-    def reject(self, msg: Message) -> None:
-        """Reject an in-flight message, requeuing or dead-lettering it.
-
-        Args:
-            msg: The message to reject.
-
-        """
-        self._in_flight.pop(msg.id, None)
-        msg.retries += 1
-        if msg.retries > self._max_retries:
-            self._dead_letters.append(msg)
-        else:
-            heapq.heappush(self._messages, (msg.priority, self._counter, msg))
-            self._counter += 1
-
-    def get_dead_letter(self) -> Message | None:
-        """Dequeue the next message from the dead-letter queue.
-
-        Returns:
-            The next dead-lettered message, or None if empty.
-
-        """
-        if not self._dead_letters:
-            return None
-        return self._dead_letters.popleft()
+        heapq.heappush(self._messages, (msg.priority, self._counter, msg))
+        self._counter += 1
