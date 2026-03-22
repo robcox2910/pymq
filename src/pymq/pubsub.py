@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections import defaultdict
 from collections.abc import Callable
 
@@ -44,10 +45,8 @@ class PubSub:
             handler: The handler to remove.
 
         """
-        try:
+        with contextlib.suppress(ValueError):
             self._subscribers[topic].remove(handler)
-        except ValueError:
-            pass
         if not self._subscribers[topic]:
             del self._subscribers[topic]
 
