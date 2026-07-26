@@ -116,9 +116,6 @@ def reject(self, msg: Message) -> None:
 
     Args:
         msg: The message to reject.
-
-    Raises:
-        MessageExpiredError: If the message exceeds max retries.
     """
 ```
 

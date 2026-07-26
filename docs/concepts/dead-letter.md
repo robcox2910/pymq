@@ -16,7 +16,7 @@ figure out what went wrong.
 ```python
 from pymq.queue import MessageQueue
 
-q = MessageQueue("orders", max_retries=3)
+q = MessageQueue("orders", max_retries=2)
 
 msg = q.get()
 # Processing fails... message goes back on the queue
@@ -26,7 +26,7 @@ msg = q.get()
 q.reject(msg)  # retry 2
 
 msg = q.get()
-q.reject(msg)  # retry 3 -- moved to dead letter queue!
+q.reject(msg)  # too many retries -- moved to dead letter queue!
 
 dlq_msg = q.get_dead_letter()  # Retrieve from DLQ for inspection
 ```

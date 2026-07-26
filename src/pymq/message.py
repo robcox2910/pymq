@@ -7,7 +7,12 @@ from datetime import UTC, datetime
 
 @dataclass
 class Message:
-    """Represent a single message in the queue.
+    """A single message -- like a letter sealed in an envelope.
+
+    Just as a letter carries its address, a postmark, and the note
+    inside, a message carries its ``id`` (address), ``timestamp``
+    (postmark), and ``body`` (the note). The queue delivers the whole
+    envelope from sender to receiver.
 
     Args:
         id: Unique identifier for this message.

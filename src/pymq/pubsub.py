@@ -8,7 +8,12 @@ from collections.abc import Callable
 
 
 class PubSub:
-    """Publish-subscribe messaging system.
+    """Publish-subscribe messaging -- like a newsletter.
+
+    One writer sends out an issue, and everyone who subscribed to that
+    newsletter gets their own copy in the mail. Here, publishers send
+    messages to named topics, and every subscriber to that topic
+    receives a copy. Readers can subscribe or unsubscribe any time.
 
     Publishers send messages to named topics. Every subscriber registered
     for that topic receives a copy of the message. Subscribers can join
