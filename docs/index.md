@@ -44,8 +44,14 @@ important messages jump ahead, like an express checkout lane.
 ### 4. Acknowledgment -- Signing for a Package
 
 When a consumer takes a message, they **acknowledge** it to say
-"I got it, you can delete it." If they crash before acknowledging,
-the message goes back on the queue for someone else.
+"I got it, you can delete it." If processing fails, the consumer can
+**reject** the message to send it back on the queue for another try.
+
+> **Heads up:** PyMQ has no automatic "visibility timeout." A message
+> stays in-flight until the consumer explicitly acknowledges or rejects
+> it. If a consumer crashes without doing either, the message is *not*
+> redelivered on its own -- it simply stays in-flight. Adding a timeout
+> that redelivers abandoned messages is a great exercise to try yourself!
 
 ## Our Building Blocks
 

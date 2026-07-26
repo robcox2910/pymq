@@ -157,6 +157,27 @@ class TestMessageQueueReject:
         q.acknowledge(msg2)
         assert q.size == 0
 
+    def test_reject_after_acknowledge_is_noop(self) -> None:
+        """Rejecting an already-acknowledged message must not resurrect it."""
+        q = MessageQueue("test")
+        q.put("done")
+        msg = q.get()
+        assert msg is not None
+        q.acknowledge(msg)
+        q.reject(msg)  # should do nothing -- message already handled
+        assert q.size == 0
+        assert q.dead_letter_count == 0
+        assert msg.retries == 0
+
+    def test_reject_never_in_flight_is_noop(self) -> None:
+        """Rejecting a message that was never in-flight must not requeue it."""
+        q = MessageQueue("test")
+        msg = q.put("never-taken")
+        q.reject(msg)  # never get()-ed, so nothing to reject
+        assert q.size == 1  # only the original, no duplicate
+        assert q.dead_letter_count == 0
+        assert msg.retries == 0
+
     def test_multiple_messages_reject_one(self) -> None:
         """Rejecting one message should not affect others."""
         q = MessageQueue("test")

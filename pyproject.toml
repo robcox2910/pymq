@@ -18,7 +18,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
     "Typing :: Typed",
 ]
-keywords = ["message-queue", "pubsub", "async", "education"]
+keywords = ["message-queue", "pubsub", "education"]
 dependencies = []
 
 [project.urls]
@@ -98,7 +98,7 @@ addopts = [
 [tool.coverage.run]
 source = ["src"]
 branch = true
-omit = ["*/tests/*", "*/__pycache__/*", "*/.venv/*", "*/_version.py", "*/cli.py"]
+omit = ["*/tests/*", "*/__pycache__/*", "*/.venv/*", "*/_version.py"]
 
 [tool.coverage.report]
 precision = 2
