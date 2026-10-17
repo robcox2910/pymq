@@ -1,5 +1,6 @@
-"""PyMQ network broker: data model, errors, topics, work queues and the server."""
+"""PyMQ network broker: data model, errors, topics, work queues, the server and the client."""
 
+from pymq.broker.client import BrokerClient
 from pymq.broker.core import Broker, BrokerStats, PublishResult
 from pymq.broker.errors import (
     BrokerError,
@@ -11,6 +12,7 @@ from pymq.broker.errors import (
     QueueFullError,
     QueueNotFoundError,
 )
+from pymq.broker.handles import Consumer, Delivery, DeliveryHandler, EventHandler, Subscription
 from pymq.broker.model import (
     DeadLetter,
     DeadReason,
@@ -38,15 +40,20 @@ from pymq.broker.workqueue import DeliverySink, WorkQueue
 __all__ = [
     "SYSTEM_PREFIX",
     "Broker",
+    "BrokerClient",
     "BrokerError",
     "BrokerServer",
     "BrokerStats",
     "BrokerUnavailableError",
     "ConnectionOutbox",
+    "Consumer",
     "DeadLetter",
     "DeadReason",
+    "Delivery",
+    "DeliveryHandler",
     "DeliverySink",
     "Envelope",
+    "EventHandler",
     "EventSink",
     "InvalidNameError",
     "InvalidRequestError",
@@ -60,6 +67,7 @@ __all__ = [
     "QueueFullError",
     "QueueNotFoundError",
     "QueueStats",
+    "Subscription",
     "TimerHeap",
     "TopicEvent",
     "TopicRouter",
