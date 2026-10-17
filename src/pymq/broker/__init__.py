@@ -1,4 +1,4 @@
-"""PyMQ network broker: data model, errors, topics and work queues."""
+"""PyMQ network broker: data model, errors, topics, work queues and the server."""
 
 from pymq.broker.core import Broker, BrokerStats, PublishResult
 from pymq.broker.errors import (
@@ -23,7 +23,9 @@ from pymq.broker.model import (
     utc_now_iso,
     validate_queue_name,
 )
+from pymq.broker.outbox import ConnectionOutbox
 from pymq.broker.router import EventSink, TopicEvent, TopicRouter
+from pymq.broker.server import BrokerServer
 from pymq.broker.timers import TimerHeap
 from pymq.broker.topics import (
     SYSTEM_PREFIX,
@@ -37,8 +39,10 @@ __all__ = [
     "SYSTEM_PREFIX",
     "Broker",
     "BrokerError",
+    "BrokerServer",
     "BrokerStats",
     "BrokerUnavailableError",
+    "ConnectionOutbox",
     "DeadLetter",
     "DeadReason",
     "DeliverySink",
