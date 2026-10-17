@@ -32,12 +32,22 @@ bus.publish("sports", "Team wins championship!")
 # Only my_handler is called -- another_handler ignores sports
 ```
 
+## When a Subscriber Trips Over
+
+What if one reader's letterbox is jammed? The postman doesn't give up and go
+home -- he still delivers to every other house on the street. PyMQ works the
+same way: if one subscriber's handler crashes, every other subscriber still
+gets the message. Only *after* everyone has been visited does `publish()`
+raise a `DeliveryError`, which lists exactly which handlers failed and why --
+so problems are never hidden, and never spoil it for everyone else.
+
 ## What We Test
 
 - Publishing delivers to all subscribers of that topic.
 - Subscribers to other topics don't receive the message.
 - Multiple subscribers to the same topic all get the message.
 - Unsubscribing stops delivery.
+- A crashing subscriber doesn't stop the others; `DeliveryError` reports it.
 
 ## Next Up
 
