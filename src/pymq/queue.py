@@ -3,6 +3,9 @@
 import heapq
 from abc import ABC, abstractmethod
 from collections import deque
+from collections.abc import Iterable
+from dataclasses import asdict
+from typing import ClassVar, Self
 
 from pymq.message import Message, create_message
 
@@ -23,6 +26,9 @@ class BaseMessageQueue(ABC):
     """
 
     __slots__ = ("_dead_letters", "_in_flight", "_max_retries", "_name")
+
+    kind: ClassVar[str]
+    """How the line is ordered, written into save files (``fifo`` or ``priority``)."""
 
     def __init__(self, name: str, max_retries: int = 3) -> None:
         """Create a new message queue."""
@@ -110,6 +116,57 @@ class BaseMessageQueue(ABC):
         else:
             self._requeue(msg)
 
+    @abstractmethod
+    def _waiting(self) -> list[Message]:
+        """Return the waiting messages in the order they would be handed out."""
+
+    def to_dict(self) -> dict[str, object]:
+        """Describe the whole queue as plain data, ready to save as JSON.
+
+        Messages that were taken but never acknowledged go first in the
+        waiting line: a real broker hands them out again after a restart,
+        because nobody confirmed they were dealt with.
+
+        Returns:
+            The queue's name, kind, retry limit, waiting messages and
+            dead letters.
+
+        """
+        waiting = [*self._in_flight.values(), *self._waiting()]
+        return {
+            "name": self._name,
+            "kind": self.kind,
+            "max_retries": self._max_retries,
+            "waiting": [asdict(msg) for msg in waiting],
+            "dead_letters": [asdict(msg) for msg in self._dead_letters],
+        }
+
+    @classmethod
+    def from_messages(
+        cls,
+        name: str,
+        max_retries: int,
+        waiting: Iterable[Message],
+        dead_letters: Iterable[Message],
+    ) -> Self:
+        """Rebuild a queue from saved messages, keeping their order.
+
+        Args:
+            name: Human-readable queue name.
+            max_retries: Maximum requeue attempts before dead-lettering.
+            waiting: The waiting messages, in delivery order.
+            dead_letters: The dead-lettered messages, oldest first.
+
+        Returns:
+            A queue that hands the messages out in the same order as before.
+
+        """
+        queue = cls(name, max_retries)
+        for msg in waiting:
+            queue._requeue(msg)
+        queue._dead_letters.extend(dead_letters)
+        return queue
+
     def get_dead_letter(self) -> Message | None:
         """Dequeue the next message from the dead-letter queue.
 
@@ -137,6 +194,8 @@ class MessageQueue(BaseMessageQueue):
     """
 
     __slots__ = ("_messages",)
+
+    kind = "fifo"
 
     def __init__(self, name: str, max_retries: int = 3) -> None:
         """Create a new FIFO message queue."""
@@ -176,6 +235,10 @@ class MessageQueue(BaseMessageQueue):
         self._in_flight[msg.id] = msg
         return msg
 
+    def _waiting(self) -> list[Message]:
+        """Return the waiting messages, front of the line first."""
+        return list(self._messages)
+
     def _requeue(self, msg: Message) -> None:
         """Put a rejected message back at the end of the line.
 
@@ -200,6 +263,8 @@ class PriorityMessageQueue(BaseMessageQueue):
     """
 
     __slots__ = ("_counter", "_messages")
+
+    kind = "priority"
 
     def __init__(self, name: str, max_retries: int = 3) -> None:
         """Create a new priority message queue."""
@@ -240,6 +305,10 @@ class PriorityMessageQueue(BaseMessageQueue):
         _, _, msg = heapq.heappop(self._messages)
         self._in_flight[msg.id] = msg
         return msg
+
+    def _waiting(self) -> list[Message]:
+        """Return the waiting messages, most urgent first, ties in arrival order."""
+        return [msg for _, _, msg in sorted(self._messages)]
 
     def _requeue(self, msg: Message) -> None:
         """Put a rejected message back into the heap at its original priority.
