@@ -197,8 +197,16 @@ class QueueStore:
         )
 
     def dead_letters(self, limit: int | None = None) -> list[DeadLetter]:
-        """Return dead letters, oldest first, at most ``limit`` of them."""
+        """Return dead letters, oldest first, at most ``limit`` of them.
+
+        Raises:
+            ValueError: If ``limit`` is negative.
+
+        """
         self._check_open()
+        if limit is not None and limit < 0:
+            msg = f"limit must be >= 0, got {limit!r}"
+            raise ValueError(msg)
         letters = list(self._dead_letters)
         return letters if limit is None else letters[:limit]
 

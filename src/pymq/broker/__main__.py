@@ -73,7 +73,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the broker until Ctrl-C and return the exit code."""
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-    logging.getLogger("pymq.broker.server").setLevel(logging.DEBUG)
     try:
         run(serve_forever(args.host, args.port, heartbeat=args.heartbeat))
     except KeyboardInterrupt:

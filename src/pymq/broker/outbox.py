@@ -10,7 +10,7 @@ and counted, so a reader who stopped reading costs only themselves.
 
 import logging
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Protocol
 
 from pynet.errors import ConnectionClosedError
@@ -35,7 +35,8 @@ class PushTarget(Protocol):
         ...
 
 
-type _Item = tuple[str, JsonValue, tuple[bytes, ...]]
+type PushFailed = Callable[[LeasedMessage, str], None]
+type _Item = tuple[str, JsonValue, tuple[bytes, ...], LeasedMessage | str]
 
 
 class ConnectionOutbox:
@@ -44,16 +45,27 @@ class ConnectionOutbox:
     Args:
         peer: Where pushes go (normally the connection's ``Peer``).
         max_pending: The default number of events kept per subscription.
+        on_push_failed: Called with a delivery and an error text when its
+            push fails for a reason other than the connection closing, so
+            the delivery can be given back (nacked) instead of waiting out
+            its lease.
 
     """
 
-    def __init__(self, peer: PushTarget, *, max_pending: int = DEFAULT_MAX_PENDING) -> None:
+    def __init__(
+        self,
+        peer: PushTarget,
+        *,
+        max_pending: int = DEFAULT_MAX_PENDING,
+        on_push_failed: PushFailed | None = None,
+    ) -> None:
         """Create an empty, not yet started outbox."""
         if max_pending < 1:
             msg = f"max_pending must be >= 1, got {max_pending!r}"
             raise ValueError(msg)
         self._peer = peer
         self._max_pending = max_pending
+        self._on_push_failed = on_push_failed
         self._deliveries: deque[LeasedMessage] = deque()
         self._events: dict[str, deque[TopicEvent]] = {}
         self._limits: dict[str, int] = {}
@@ -95,10 +107,14 @@ class ConnectionOutbox:
             self._ring.append(sub_id)
         if len(pending) >= self._limits.get(sub_id, self._max_pending):
             pending.popleft()
-            self._drops[sub_id] = self._drops.get(sub_id, 0) + 1
-            self._total_dropped += 1
+            self._count_drop(sub_id)
         pending.append(event)
         self._wake.set()
+
+    def _count_drop(self, sub_id: str) -> None:
+        """Count one event lost for ``sub_id``."""
+        self._drops[sub_id] = self._drops.get(sub_id, 0) + 1
+        self._total_dropped += 1
 
     def dropped(self, sub_id: str) -> int:
         """Return how many events were dropped for ``sub_id`` (0 once forgotten)."""
@@ -140,7 +156,7 @@ class ConnectionOutbox:
                 "delivery_tag": leased.delivery_tag,
                 "envelope": envelope_to_json(leased.envelope),
             }
-            return PUSH_DELIVER, body, leased.envelope.attachments
+            return PUSH_DELIVER, body, leased.envelope.attachments, leased
         while self._ring:
             sub_id = self._ring.popleft()
             pending = self._events.get(sub_id)
@@ -150,7 +166,7 @@ class ConnectionOutbox:
             if pending:
                 self._ring.append(sub_id)
             body = {"sub_id": sub_id, "event": event_to_json(event)}
-            return PUSH_EVENT, body, event.attachments
+            return PUSH_EVENT, body, event.attachments, sub_id
         return None
 
     async def _drain(self) -> None:
@@ -161,13 +177,26 @@ class ConnectionOutbox:
                 self._wake.clear()
                 await self._wake.wait()
                 continue
-            method, body, attachments = item
+            method, body, attachments, origin = item
             self._pushing = True
             try:
                 await self._peer.push(method, body, attachments=attachments)
             except ConnectionClosedError:
                 return  # the connection's close callback cleans up
-            except Exception:
+            except Exception as exc:
                 logger.exception("failed to push %s; skipping it", method)
+                self._skipped(origin, exc)
             finally:
                 self._pushing = False
+
+    def _skipped(self, origin: LeasedMessage | str, exc: Exception) -> None:
+        """Count a skipped event, or give a skipped delivery back at once."""
+        if isinstance(origin, str):
+            self._count_drop(origin)
+            return
+        if self._on_push_failed is None:
+            return
+        try:
+            self._on_push_failed(origin, f"push failed: {exc}")
+        except Exception:
+            logger.exception("giving back delivery %d failed", origin.delivery_tag)

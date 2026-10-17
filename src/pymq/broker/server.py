@@ -80,7 +80,15 @@ class BrokerServer:
         return len(self._connections)
 
     async def start(self, host: str = DEFAULT_HOST, port: int = 0) -> None:
-        """Start listening on ``host:port`` (0 picks a free port)."""
+        """Start listening on ``host:port`` (0 picks a free port).
+
+        Raises:
+            RuntimeError: If the server was already started.
+
+        """
+        if self._server is not None:
+            msg = "BrokerServer is already started"
+            raise RuntimeError(msg)
         self._server = await serve(
             host, port, self._setup, heartbeat_interval=self._heartbeat_interval
         )
@@ -117,7 +125,7 @@ class BrokerServer:
         """Give a new peer its own connection handlers and outbox."""
         conn = Connection(peer, self._broker, self._max_pending, self._broker_stats, self._forget)
         self._connections.add(conn)
-        logger.debug("client connected from %s", peer.peername)
+        logger.info("client connected from %s", peer.peername)
 
     def _forget(self, conn: Connection) -> None:
         """Drop a closed connection, keeping its event drop count."""

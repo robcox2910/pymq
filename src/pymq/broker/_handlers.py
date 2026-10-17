@@ -9,13 +9,14 @@ them all away when the customer leaves.
 
 import logging
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 
 from pynet.messaging import Message, Peer
 
 from pymq.broker import protocol as p
 from pymq.broker.core import Broker
 from pymq.broker.errors import BrokerError, InvalidRequestError, QueueNotFoundError
-from pymq.broker.model import JsonValue
+from pymq.broker.model import JsonValue, LeasedMessage
 from pymq.broker.outbox import ConnectionOutbox
 from pymq.broker.protocol import Json
 from pymq.broker.router import TopicEvent
@@ -49,8 +50,10 @@ class Connection:
     ) -> None:
         """Register every handler on ``peer`` and start the outbox."""
         self.peer = peer
-        self.outbox = ConnectionOutbox(peer, max_pending=max_pending)
         self._broker = broker
+        self.outbox = ConnectionOutbox(
+            peer, max_pending=max_pending, on_push_failed=self._give_back
+        )
         self._max_pending = max_pending
         self._on_closed = on_closed
         self._consumers: dict[str, str] = {}  # consumer tag -> queue
@@ -179,6 +182,16 @@ class Connection:
         self._consumers[tag] = queue
         return {"consumer_tag": tag}
 
+    def _give_back(self, leased: LeasedMessage, error: str) -> None:
+        """Nack a delivery whose push failed, so it is retried without waiting out its lease."""
+        with suppress(QueueNotFoundError):  # deleted meanwhile: nothing left to give back
+            self._broker.nack(
+                leased.queue,
+                leased.delivery_tag,
+                error=error,
+                consumer_tag=leased.consumer_tag,
+            )
+
     def _cancel(self, msg: Message) -> Json:
         """Cancel an owned consumer (an unknown tag is ignored)."""
         tag = p.req_str(msg.body, "consumer_tag")
@@ -255,16 +268,24 @@ class Connection:
     # -- closing --
 
     def _closed(self, cause: BaseException | None) -> None:
-        """Cancel consumers, drop subscriptions and close the outbox."""
-        logger.debug("connection %s closed (%s)", self.peer.peername, cause)
-        for tag in self._consumers:
-            self._broker.cancel(tag)
-        self._consumers.clear()
-        for sub_id in self._subs:
-            self._broker.unsubscribe(sub_id)
-        self._subs.clear()
-        self.outbox.close()
-        self._on_closed(self)
+        """Cancel consumers, drop subscriptions and close the outbox.
+
+        Each step is guarded on its own, so one failing cancel still lets
+        every other consumer be cancelled and ``on_closed`` always runs.
+        """
+        logger.info("client disconnected from %s (%s)", self.peer.peername, cause)
+        try:
+            for tag in self._consumers:
+                _logged(self._broker.cancel, tag)
+            for sub_id in self._subs:
+                _logged(self._broker.unsubscribe, sub_id)
+        finally:
+            self._consumers.clear()
+            self._subs.clear()
+            try:
+                self.outbox.close()
+            finally:
+                self._on_closed(self)
 
 
 _OK: Json = {"ok": True}
@@ -276,6 +297,14 @@ def _obj(body: JsonValue) -> dict[str, JsonValue]:
         msg = "request body must be an object"
         raise InvalidRequestError(msg)
     return body
+
+
+def _logged[T](step: Callable[[T], object], arg: T) -> None:
+    """Run one clean-up step, logging (not raising) any error."""
+    try:
+        step(arg)
+    except Exception:
+        logger.exception("clean-up step failed for %r", arg)
 
 
 def _guarded(handler: RequestHandler) -> Callable[[Message], Awaitable[Json]]:
