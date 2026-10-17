@@ -19,7 +19,12 @@ classifiers = [
     "Typing :: Typed",
 ]
 keywords = ["message-queue", "pubsub", "education"]
-dependencies = []
+dependencies = [
+    "pynet",
+]
+
+[tool.uv.sources]
+pynet = { path = "../pynet", editable = true }
 
 [project.urls]
 Homepage = "https://github.com/robcox2910/pymq"
@@ -36,6 +41,7 @@ dev = [
     "pyright>=1.1.400",
     "commitizen>=4.4.0",
     "pip-audit>=2.10.0",
+    "pytest-timeout>=2.3.1",
 ]
 
 [build-system]
@@ -90,6 +96,7 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = [
     "--verbose",
+    "--timeout=10",
     "--cov=src/pymq",
     "--cov-report=term-missing",
     "--cov-fail-under=80",
