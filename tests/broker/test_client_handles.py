@@ -190,7 +190,9 @@ class TestRobustness:
             )
             event = TopicEvent("a.b", 1, {}, (), "2026-10-17T00:00:00")
             ev_body: Json = {"sub_id": "nobody", "event": p.event_to_json(event)}
-            await c._router.on_event(Message(MessageType.PUSH, None, p.PUSH_EVENT, ev_body))
+            await c._router.on_event(
+                Message(MessageType.PUSH, None, p.PUSH_EVENT, ev_body), GENERATION
+            )
             await c.close()
 
         with caplog.at_level(logging.DEBUG, logger="pymq.broker"):
@@ -334,7 +336,7 @@ class TestConnectionLoss:
         async def main() -> None:
             c = BrokerClient(HOST, UNUSED_PORT)
             await c._router.on_deliver(Message(MessageType.PUSH, None, p.PUSH_DELIVER, 1), 1)
-            await c._router.on_event(Message(MessageType.PUSH, None, p.PUSH_EVENT, [1]))
+            await c._router.on_event(Message(MessageType.PUSH, None, p.PUSH_EVENT, [1]), 1)
             await c.close()
 
         with caplog.at_level(logging.WARNING, logger="pymq.broker"):

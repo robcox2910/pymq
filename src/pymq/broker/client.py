@@ -6,6 +6,12 @@ consumers and events for your subscriptions arrive as pushes; each parcel's
 handler runs in its own task (so up to ``prefetch`` run at once), while one
 subscription's events are handled one at a time, in order.
 
+When the line drops the client redials, replays its setup (queues,
+bindings, subscriptions, consumers) and carries on. Requests made while
+it is down wait for it to come back (up to their timeout), parcels from
+before the drop can no longer be acked, and ``put`` resends with the same
+message id so the broker keeps just one copy.
+
 Example:
     async with BrokerClient("127.0.0.1", port) as client:
         await client.declare_queue("jobs")
@@ -14,15 +20,18 @@ Example:
 """
 
 import logging
+import uuid
 from collections.abc import Callable, Collection, Mapping, Sequence
 from types import TracebackType
 from typing import Any, Self
 
-from pynet.errors import ConnectionClosedError, NotConnectedError, RemoteError
 from pynet.messaging import ConnectionEvent, ReconnectingClient
 
 from pymq.broker import protocol as p
+from pymq.broker._lifecycle import Lifecycle
+from pymq.broker._replay import declare_body
 from pymq.broker._routing import PushRouter, Registry
+from pymq.broker._session import Session
 from pymq.broker.core import PublishResult
 from pymq.broker.errors import InvalidRequestError
 from pymq.broker.handles import (
@@ -66,8 +75,9 @@ class BrokerClient:
     Args:
         host: The server's host name or address.
         port: The server's port.
-        put_timeout: Seconds to wait for a ``put`` to be answered.
-        request_timeout: Seconds to wait for any other request.
+        put_timeout: Seconds a ``put`` may take in total, resends included.
+        request_timeout: Seconds to wait for any other request (including
+            waiting for a dropped line to come back).
         **reconnect_kwargs: Passed on to ``ReconnectingClient`` (for example
             ``initial_backoff`` or ``heartbeat_interval``).
 
@@ -86,8 +96,12 @@ class BrokerClient:
         self._put_timeout = put_timeout
         self._request_timeout = request_timeout
         self._registry = Registry()
-        self._router = PushRouter(self._registry, self._settle)
+        self._router = PushRouter(self._registry, lambda d, m, b: self._life.settle(d, m, b))
         self._rc = ReconnectingClient(host, port, setup=self._router.setup, **reconnect_kwargs)
+        self._session = Session(
+            self._rc, replay=lambda: self._life.replay(), on_drop=self._router.disconnected
+        )
+        self._life = Lifecycle(self._session, self._router, self._registry, request_timeout)
         self._closed = False
 
     # -- lifecycle --
@@ -102,14 +116,19 @@ class BrokerClient:
         self._rc.start()
 
     async def wait_connected(self, timeout: float | None = None) -> None:
-        """Wait until connected (``TimeoutError`` after ``timeout`` seconds)."""
-        await self._rc.wait_connected(timeout)
+        """Wait until connected and set up again (``TimeoutError`` after ``timeout``)."""
+        await self._session.wait_ready(timeout)
 
     async def close(self) -> None:
-        """Stop handlers and subscriptions and hang up (safe to call twice)."""
+        """Stop handlers and subscriptions and hang up (safe to call twice).
+
+        Pushes that land while the line is being closed are dropped: no new
+        handler or subscription worker starts once ``close`` has begun.
+        """
         if self._closed:
             return
         self._closed = True
+        self._session.close()
         self._router.stop()
         await self._rc.stop()
 
@@ -141,19 +160,22 @@ class BrokerClient:
     async def declare_queue(self, name: str, config: QueueConfig | None = None) -> QueueConfig:
         """Create a queue (or check an existing one) and return its config."""
         validate_queue_name(name)
-        body: Json = {"name": name}
-        if config is not None:
-            body["config"] = p.config_to_json(config)
-        reply = await self._call(p.QUEUE_DECLARE, body)
+        reply = await self._call(p.QUEUE_DECLARE, declare_body(name, config))
         self._registry.queues[name] = config
         return p.config_from_json(reply.get("config"))
 
     async def delete_queue(self, name: str) -> None:
-        """Delete a queue and everything in it."""
+        """Delete a queue and everything in it (its bindings and consumers too)."""
         validate_queue_name(name)
         await self._call(p.QUEUE_DELETE, {"name": name})
-        self._registry.queues.pop(name, None)
-        self._registry.bindings = {b for b in self._registry.bindings if b[1] != name}
+        reg = self._registry
+        reg.queues.pop(name, None)
+        reg.bindings = {b: None for b in reg.bindings if b[1] != name}
+        for consumer in [c for c in reg.wanted_consumers if c.queue == name]:
+            reg.wanted_consumers.remove(consumer)
+            if consumer.tag is not None:
+                reg.consumers.pop(consumer.tag, None)
+                consumer.tag = None
 
     async def purge_queue(self, name: str) -> int:
         """Throw away a queue's waiting messages and return how many."""
@@ -186,18 +208,27 @@ class BrokerClient:
         attachments: Sequence[bytes] = (),
         delay: float = 0.0,
     ) -> PutResult:
-        """Put a message on a queue and return its id (and whether it was a duplicate)."""
+        """Put a message on a queue and return its id (and whether it was a duplicate).
+
+        A message id is made up here when none is given, so if the line drops
+        before the answer comes the very same message can be sent again once
+        it is back; the broker keeps only one copy. A resend that finds its
+        own first attempt already stored reports ``duplicate=True``.
+
+        Raises:
+            BrokerUnavailableError: If no answer came within ``put_timeout``.
+
+        """
         validate_queue_name(queue)
         request: Json = {
+            "id": id if id is not None else uuid.uuid4().hex,
             "queue": queue,
             "body": body,
             "priority": priority,
             "headers": dict(headers or {}),
             "delay": delay,
         }
-        if id is not None:
-            request["id"] = id
-        reply = await self._call(
+        reply = await self._session.resend_until_answered(
             p.MSG_PUT, request, attachments=attachments, timeout=self._put_timeout
         )
         return PutResult(p.req_str(reply, "id"), p.opt_bool(reply, "duplicate") is True)
@@ -213,30 +244,12 @@ class BrokerClient:
         """Start receiving a queue's messages; ``handler`` runs once per delivery."""
         validate_queue_name(queue)
         consumer = Consumer(
-            queue, handler, prefetch=prefetch, auto_ack=auto_ack, cancel=self._cancel_consumer
+            queue, handler, prefetch=prefetch, auto_ack=auto_ack, cancel=self._life.cancel_consumer
         )
-        await self._start_consumer(consumer)
+        await self._session.wait_ready_or_unavailable(self._request_timeout)
+        await self._life.start_consumer(consumer)
+        self._registry.wanted_consumers.append(consumer)
         return consumer
-
-    async def _start_consumer(self, consumer: Consumer) -> None:
-        """Ask the server for a consumer, then hand it any deliveries that beat the reply."""
-        early = self._router.early_deliveries
-        early.begin()
-        try:
-            reply = await self._call(
-                p.CONSUME_START, {"queue": consumer.queue, "prefetch": consumer.prefetch}
-            )
-            self._router.claim_consumer(p.req_str(reply, "consumer_tag"), consumer)
-        finally:
-            early.end()
-
-    async def _cancel_consumer(self, consumer: Consumer) -> None:
-        """Forget a consumer and tell the server (unless the line is down)."""
-        tag = consumer.tag
-        if tag is None or self._registry.consumers.pop(tag, None) is None:
-            return
-        consumer.tag = None
-        await self._quietly(p.CONSUME_CANCEL, {"consumer_tag": tag})
 
     # -- topics --
 
@@ -260,45 +273,26 @@ class BrokerClient:
         """Receive events matching ``pattern``; ``handler`` sees them one at a time."""
         validate_pattern(pattern)
         sub = Subscription(
-            pattern, handler, max_pending=max_pending, cancel=self._cancel_subscription
+            pattern, handler, max_pending=max_pending, cancel=self._life.cancel_subscription
         )
-        await self._start_subscription(sub)
+        await self._session.wait_ready_or_unavailable(self._request_timeout)
+        await self._life.start_subscription(sub)
+        self._registry.wanted_subscriptions.append(sub)
         return sub
-
-    async def _start_subscription(self, sub: Subscription) -> None:
-        """Ask the server for a subscription, then feed it any events that beat the reply."""
-        early = self._router.early_events
-        early.begin()
-        try:
-            reply = await self._call(
-                p.TOPIC_SUBSCRIBE, {"pattern": sub.pattern, "max_pending": sub.max_pending}
-            )
-            self._router.claim_subscription(p.req_str(reply, "sub_id"), sub)
-        finally:
-            early.end()
-
-    async def _cancel_subscription(self, sub: Subscription) -> None:
-        """Forget a subscription and tell the server (unless the line is down)."""
-        sub_id = sub.sub_id
-        if sub_id is None or self._registry.subscriptions.pop(sub_id, None) is None:
-            return
-        sub.sub_id = None
-        sub.stop()
-        await self._quietly(p.TOPIC_UNSUBSCRIBE, {"sub_id": sub_id})
 
     async def bind(self, pattern: str, queue: str) -> None:
         """Copy events matching ``pattern`` into ``queue``."""
         validate_pattern(pattern)
         validate_queue_name(queue)
         await self._call(p.TOPIC_BIND, {"pattern": pattern, "queue": queue})
-        self._registry.bindings.add((pattern, queue))
+        self._registry.bindings[pattern, queue] = None
 
     async def unbind(self, pattern: str, queue: str) -> None:
         """Stop copying events matching ``pattern`` into ``queue``."""
         validate_pattern(pattern)
         validate_queue_name(queue)
         await self._call(p.TOPIC_UNBIND, {"pattern": pattern, "queue": queue})
-        self._registry.bindings.discard((pattern, queue))
+        self._registry.bindings.pop((pattern, queue), None)
 
     # -- dead letters --
 
@@ -330,51 +324,9 @@ class BrokerClient:
     # -- requests --
 
     async def _call(
-        self,
-        method: str,
-        body: JsonValue = None,
-        *,
-        attachments: Sequence[bytes] = (),
-        timeout: float | None = None,
+        self, method: str, body: JsonValue = None, *, attachments: Sequence[bytes] = ()
     ) -> Json:
-        """Send a request and return its object reply, converting broker errors."""
-        try:
-            reply = await self._rc.request(
-                method,
-                body,
-                attachments=attachments,
-                timeout=self._request_timeout if timeout is None else timeout,
-            )
-        except RemoteError as err:
-            converted = p.remote_to_error(err)
-            if converted is err:
-                raise
-            raise converted from err
-        return _obj(reply.body)
-
-    async def _quietly(self, method: str, body: Json) -> None:
-        """Send a tidy-up request; a dropped line already tidied up on the server."""
-        try:
-            await self._call(method, body)
-        except NotConnectedError, ConnectionClosedError:
-            logger.debug("%s skipped: not connected", method)
-
-    async def _settle(self, _delivery: Delivery, method: str, body: Json) -> bool:
-        """Send ack/nack/touch; return False if stale or the connection is gone.
-
-        The delivery is passed so a check of which connection it came from can
-        be added here (an ack from an old connection is always stale).
-        """
-        try:
-            reply = await self._call(method, body)
-        except NotConnectedError, ConnectionClosedError:
-            return False  # the server released the lease when the line dropped
-        return p.opt_bool(reply, "stale") is not True
-
-
-def _obj(body: JsonValue) -> Json:
-    """Return ``body`` if it is a JSON object, else raise InvalidRequestError."""
-    if not isinstance(body, dict):
-        msg = "reply body must be an object"
-        raise InvalidRequestError(msg)
-    return body
+        """Send a request once the line is up, within ``request_timeout``."""
+        return await self._session.request(
+            method, body, attachments=attachments, timeout=self._request_timeout
+        )

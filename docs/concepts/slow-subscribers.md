@@ -114,4 +114,4 @@ connections that have since closed.
 ## What's Next?
 
 When a connection drops altogether, the client has to dial back in and set
-everything up again: see reconnecting clients.
+everything up again: see [Reconnecting Clients](reconnecting-clients.md).

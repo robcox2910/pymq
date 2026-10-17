@@ -7,6 +7,7 @@ consumer or subscription waits in an ``EarlyBuffer`` until that reply lands.
 """
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from pynet.loop import Task, spawn
@@ -20,18 +21,35 @@ from pymq.broker.router import TopicEvent
 
 logger = logging.getLogger(__name__)
 
+ORPHAN_CANCEL_TIMEOUT = 5.0  # seconds to wait for the server to cancel an orphan
+
 
 @dataclass
 class Registry:
     """Everything a client has set up on the broker, in one place.
 
-    After a reconnect this is what has to be declared, bound and started again.
+    ``queues``, ``bindings``, ``wanted_subscriptions`` and ``wanted_consumers``
+    are the record that is replayed after a reconnect, in the order they were
+    made. ``consumers`` and ``subscriptions`` map the *current* connection's
+    server tags and ids to their handles; a new connection hands out new
+    names, so those two maps are emptied whenever the line drops.
     """
 
     queues: dict[str, QueueConfig | None] = field(default_factory=dict[str, QueueConfig | None])
-    bindings: set[tuple[str, str]] = field(default_factory=set[tuple[str, str]])
+    bindings: dict[tuple[str, str], None] = field(default_factory=dict[tuple[str, str], None])
+    wanted_consumers: list[Consumer] = field(default_factory=list[Consumer])
+    wanted_subscriptions: list[Subscription] = field(default_factory=list[Subscription])
     consumers: dict[str, Consumer] = field(default_factory=dict[str, Consumer])  # by server tag
     subscriptions: dict[str, Subscription] = field(default_factory=dict[str, Subscription])
+
+    def forget_connection(self) -> None:
+        """Forget the old connection's tags and ids (the handles stay wanted)."""
+        for consumer in self.consumers.values():
+            consumer.tag = None
+        for sub in self.subscriptions.values():
+            sub.sub_id = None
+        self.consumers.clear()
+        self.subscriptions.clear()
 
 
 class EarlyBuffer[T]:
@@ -41,9 +59,13 @@ class EarlyBuffer[T]:
     once none is, anything still unclaimed is thrown away.
     """
 
-    def __init__(self, kind: str) -> None:
-        """Create an empty buffer for pushes of ``kind`` (used in logs)."""
+    def __init__(self, kind: str, on_drop: Callable[[str], None] | None = None) -> None:
+        """Create an empty buffer for pushes of ``kind`` (used in logs).
+
+        ``on_drop`` is called with each key whose pushes were never claimed.
+        """
         self._kind = kind
+        self._on_drop = on_drop
         self._waiting = 0
         self._held: dict[str, list[T]] = {}
 
@@ -60,8 +82,16 @@ class EarlyBuffer[T]:
         """Note that a start request finished; drop leftovers once none are left."""
         self._waiting -= 1
         if self._waiting == 0 and self._held:
-            logger.debug("dropping unclaimed %s pushes for %s", self._kind, list(self._held))
+            keys = list(self._held)
+            logger.debug("dropping unclaimed %s pushes for %s", self._kind, keys)
             self._held.clear()
+            if self._on_drop is not None:
+                for key in keys:
+                    self._on_drop(key)
+
+    def clear(self) -> None:
+        """Forget everything held (the connection it came from has gone)."""
+        self._held.clear()
 
     def hold(self, key: str, item: T) -> bool:
         """Keep ``item`` for ``key`` if a start is in flight; return whether it was kept."""
@@ -78,6 +108,11 @@ class EarlyBuffer[T]:
 class PushRouter:
     """Route delivery and event pushes to the client's consumers and subscriptions.
 
+    Every connection gets a new *generation* number and each delivery
+    remembers the one it came on, so the client can tell an old parcel
+    from a new one. Pushes from an older connection, and pushes that land
+    after ``stop``, are dropped.
+
     Args:
         registry: Where the client's consumers and subscriptions are recorded.
         settle: Sends ack/nack/touch requests for deliveries.
@@ -88,17 +123,35 @@ class PushRouter:
         """Create a router with empty buffers."""
         self._registry = registry
         self._settle = settle
-        self.early_deliveries: EarlyBuffer[Delivery] = EarlyBuffer("delivery")
+        self.early_deliveries: EarlyBuffer[Delivery] = EarlyBuffer(
+            "delivery", on_drop=lambda tag: self._cancel_orphan(tag, self._generation)
+        )
         self.early_events: EarlyBuffer[TopicEvent] = EarlyBuffer("event")
-        self._handler_tasks: set[Task[None]] = set()
+        self._tasks: set[Task[None]] = set()
         self._generation = 0  # counts connections; each delivery remembers its own
+        self._peer: Peer | None = None
+        self._orphans: set[str] = set()  # tags already cancelled on this connection
+        self._stopped = False
+
+    @property
+    def generation(self) -> int:
+        """Return the number of the newest connection (0 before the first)."""
+        return self._generation
 
     def setup(self, peer: Peer) -> None:
         """Register push handlers on a new connection, tagged with its generation."""
         self._generation += 1
+        self._peer = peer
+        self._orphans = set()
         generation = self._generation
         peer.on(p.PUSH_DELIVER, lambda msg: self.on_deliver(msg, generation))
-        peer.on(p.PUSH_EVENT, self.on_event)
+        peer.on(p.PUSH_EVENT, lambda msg: self.on_event(msg, generation))
+
+    def disconnected(self) -> None:
+        """Forget everything tied to the connection that just dropped."""
+        self.early_deliveries.clear()
+        self.early_events.clear()
+        self._registry.forget_connection()
 
     def claim_consumer(self, tag: str, consumer: Consumer) -> None:
         """Record a started consumer and hand it any deliveries that beat the reply."""
@@ -112,13 +165,17 @@ class PushRouter:
         sub.sub_id = sub_id
         self._registry.subscriptions[sub_id] = sub
         for event in self.early_events.take(sub_id):
-            sub.feed(event)
+            if not self._stopped:
+                sub.feed(event)
 
     def stop(self) -> None:
-        """Stop every subscription worker and cancel running handlers."""
+        """Stop every subscription worker and handler, and ignore later pushes."""
+        self._stopped = True
+        for sub in self._registry.wanted_subscriptions:
+            sub.stop()
         for sub in self._registry.subscriptions.values():
             sub.stop()
-        for task in list(self._handler_tasks):
+        for task in list(self._tasks):
             task.cancel()
 
     async def on_deliver(self, msg: Message, generation: int) -> JsonValue:
@@ -135,20 +192,27 @@ class PushRouter:
         except InvalidRequestError:
             logger.warning("dropping malformed delivery push")
             return None
+        if self._stopped or generation != self._generation:
+            logger.debug("dropping delivery for %s: closing or from an old connection", tag)
+            return None
         consumer = self._registry.consumers.get(tag)
         if consumer is not None:
             self._dispatch(consumer, delivery)
         elif not self.early_deliveries.hold(tag, delivery):
             logger.debug("dropping delivery for unknown consumer %s", tag)
+            self._cancel_orphan(tag, generation)
         return None
 
-    async def on_event(self, msg: Message) -> JsonValue:
+    async def on_event(self, msg: Message, generation: int) -> JsonValue:
         """Route an event push to its subscription (or hold it until the id is known)."""
         try:
             sub_id = p.req_str(msg.body, "sub_id")
             event = p.event_from_json(_field(msg.body, "event"), msg.attachments)
         except InvalidRequestError:
             logger.warning("dropping malformed event push")
+            return None
+        if self._stopped or generation != self._generation:
+            logger.debug("dropping event for %s: closing or from an old connection", sub_id)
             return None
         sub = self._registry.subscriptions.get(sub_id)
         if sub is not None:
@@ -159,9 +223,38 @@ class PushRouter:
 
     def _dispatch(self, consumer: Consumer, delivery: Delivery) -> None:
         """Run the consumer's handler for one delivery in its own task."""
-        task = spawn(_run_handler(consumer, delivery), name=f"pymq-handler-{consumer.queue}")
-        self._handler_tasks.add(task)
-        task.add_done_callback(lambda _done: self._handler_tasks.discard(task))
+        if self._stopped:
+            return
+        self._track(spawn(_run_handler(consumer, delivery), name=f"pymq-handler-{consumer.queue}"))
+
+    def _cancel_orphan(self, tag: str, generation: int) -> None:
+        """Tell the server to stop a consumer we know nothing about (best effort).
+
+        Its parcels would otherwise sit unacked until their leases ran out,
+        again and again, using up their attempts.
+        """
+        peer = self._peer
+        if self._stopped or peer is None or generation != self._generation:
+            return
+        if tag in self._orphans:
+            return
+        self._orphans.add(tag)
+        self._track(spawn(_cancel_on(peer, tag), name=f"pymq-orphan-{tag}"))
+
+    def _track(self, task: Task[None]) -> None:
+        """Keep ``task`` until it finishes, so ``stop`` can cancel it."""
+        self._tasks.add(task)
+        task.add_done_callback(lambda _done: self._tasks.discard(task))
+
+
+async def _cancel_on(peer: Peer, tag: str) -> None:
+    """Send ``consume.cancel`` for ``tag``, logging (not raising) a failure."""
+    try:
+        await peer.request(p.CONSUME_CANCEL, {"consumer_tag": tag}, timeout=ORPHAN_CANCEL_TIMEOUT)
+    except Exception as err:  # noqa: BLE001 -- best effort; the lease expires anyway
+        logger.debug("could not cancel orphan consumer %s: %s", tag, err)
+    else:
+        logger.debug("cancelled orphan consumer %s", tag)
 
 
 async def _run_handler(consumer: Consumer, delivery: Delivery) -> None:
