@@ -8,10 +8,14 @@ import pytest
 
 EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
 EXAMPLE_FILES = sorted(EXAMPLES_DIR.glob("*.py"))
-KEY_LINES = {
-    "broker_demo": "dead letters: 1",
-    "work_queue": "bob finished job-0 (attempt 2)",
-    "topic_alerts": "alerts queue holds: 2",
+KEY_LINES: dict[str, tuple[str, ...]] = {
+    "broker_demo": ("dead letters: 1",),
+    "work_queue": (
+        "ann took job-0 (attempt 1) and crashed: her connection is lost",
+        "the broker took job-0 back from ann (lease returned, attempt 1 used up)",
+        "bob finished job-0 (attempt 2)",
+    ),
+    "topic_alerts": ("alerts queue holds: 2",),
 }
 
 
@@ -39,6 +43,8 @@ class TestExamples:
 
     @pytest.mark.parametrize("path", EXAMPLE_FILES, ids=lambda p: p.stem)
     def test_main_prints_key_line(self, path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-        """Run each example to completion and see its key output line."""
+        """Run each example to completion and see its key output lines, in order."""
         load_example(path).main()
-        assert KEY_LINES[path.stem] in capsys.readouterr().out
+        lines = capsys.readouterr().out.splitlines()
+        positions = [lines.index(line) for line in KEY_LINES[path.stem]]
+        assert positions == sorted(positions)
