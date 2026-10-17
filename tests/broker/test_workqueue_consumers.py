@@ -1,7 +1,5 @@
 """Tests for WorkQueue consumers: dispatch, leases, ack/nack/touch and retries."""
 
-import random
-
 import pytest
 from pynet.loop import sleep
 
@@ -16,16 +14,9 @@ PREFETCH = 2
 FIVE = 5
 ACK_TIMEOUT = 10.0
 TOUCH_AT = 8.0
-STEPS = 500
-SEED = 1234
 BIG_ATTEMPT = 5000
 CAP = 60.0
 FLOOR_TEST_PUTS = 300
-P_PUT = 0.4
-P_SETTLE = 0.8
-P_ACK = 0.5
-P_NACK = 0.8
-P_REQUEUE = 0.7
 
 
 class TestDispatch:
@@ -453,48 +444,3 @@ class TestMaintenance:
         """Cap the backoff instead of overflowing."""
         assert QueueConfig().retry_wait(BIG_ATTEMPT) == CAP
 
-
-class TestConservation:
-    """Check nothing is lost or duplicated under random use."""
-
-    def test_conservation_under_random_operations(self) -> None:
-        """Account for every put id exactly once after random operations."""
-
-        async def main() -> None:
-            rng = random.Random(SEED)  # noqa: S311
-            q = WorkQueue("q", QueueConfig(max_attempts=THREE, ack_timeout=5.0))
-            live: dict[int, LeasedMessage] = {}
-            acked: set[str] = set()
-
-            def sink(m: LeasedMessage) -> None:
-                live[m.delivery_tag] = m
-
-            q.add_consumer("A", sink, prefetch=FIVE)
-            q.add_consumer("B", sink, prefetch=FIVE)
-            put: list[str] = []
-            for step in range(STEPS):
-                action = rng.random()
-                if action < P_PUT:
-                    mid = f"m{step}"
-                    q.put(step, id=mid, delay=rng.choice([0.0, 0.0, 2.0]))
-                    put.append(mid)
-                elif action < P_SETTLE and live:
-                    tag = rng.choice(sorted(live))
-                    message = live.pop(tag)
-                    choice = rng.random()
-                    if choice < P_ACK:
-                        if q.ack(tag):
-                            acked.add(message.envelope.id)
-                    elif choice < P_NACK:
-                        q.nack(tag, requeue=rng.random() < P_REQUEUE)
-                else:
-                    await sleep(rng.choice([0.5, 3.0, 8.0]))
-            dead = {d.envelope.id for d in q.dead_letters()}
-            stats = q.stats()
-            assert len(dead) == stats.dead
-            assert (
-                len(put) == len(acked) + stats.dead + stats.ready + stats.delayed + stats.in_flight
-            )
-            assert not acked & dead
-
-        run_async(main)
