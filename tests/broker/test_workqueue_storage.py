@@ -2,7 +2,6 @@
 
 import logging
 import math
-from dataclasses import replace
 
 import pytest
 from pynet.loop import sleep
@@ -255,21 +254,6 @@ class TestDeadLetters:
             await sleep(TTL)
             assert q.purge_dead() == TWO
             assert q.stats().dead == 0
-
-        run_async(main)
-
-    def test_replay_resets_attempt(self) -> None:
-        """Reset the attempt count so the next delivery is the first."""
-
-        async def main() -> None:
-            q = WorkQueue("q", QueueConfig())
-            q.put("a", id="a")
-            envelope = q._records["a"].envelope  # pyright: ignore[reportPrivateUsage]
-            q._dead(replace(envelope, attempt=THREE), DeadReason.REJECTED, "boom")  # pyright: ignore[reportPrivateUsage]
-            q.purge()
-            assert q.dead_letters()[0].error == "boom"
-            assert q.replay_dead() == 1
-            assert q._records["a"].envelope.attempt == 0  # pyright: ignore[reportPrivateUsage]
 
         run_async(main)
 

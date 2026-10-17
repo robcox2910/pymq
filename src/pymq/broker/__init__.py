@@ -29,7 +29,7 @@ from pymq.broker.topics import (
     validate_pattern,
     validate_topic,
 )
-from pymq.broker.workqueue import WorkQueue
+from pymq.broker.workqueue import DeliverySink, WorkQueue
 
 __all__ = [
     "SYSTEM_PREFIX",
@@ -37,6 +37,7 @@ __all__ = [
     "BrokerUnavailableError",
     "DeadLetter",
     "DeadReason",
+    "DeliverySink",
     "Envelope",
     "InvalidNameError",
     "InvalidRequestError",

@@ -1,68 +1,50 @@
-"""A work queue's storage: what is waiting, what is delayed and what has died.
+"""A work queue: storage plus consumers, leases, acks and retries.
 
-Think of a post office sorting room. Parcels wait in a tray in priority order,
-some are held back until a delivery date, repeats of the same parcel number are
-turned away, and parcels left too long go into the returns box.
+Think of the post office counter clerks. Each clerk takes parcels on a signed
+loan (a lease): hand it back done (ack), hand it back to try again (nack), ask
+for more time (touch), or do nothing and the loan runs out and the parcel goes
+back on the tray for someone else.
 """
 
 import heapq
 import itertools
 import logging
-import math
-import uuid
-from collections import deque
-from collections.abc import Callable, Collection, Mapping, Sequence
-from dataclasses import dataclass, replace
-from enum import Enum, auto
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 
-from pynet.loop import get_running_loop
-
-from pymq.broker.errors import QueueFullError, QueueNotFoundError
-from pymq.broker.model import (
-    DeadLetter,
-    DeadReason,
-    Envelope,
-    JsonValue,
-    PutResult,
-    QueueConfig,
-    QueueStats,
-    utc_now_iso,
-)
+from pymq.broker.model import DeadLetter, DeadReason, LeasedMessage, QueueConfig
+from pymq.broker.queuestore import QueueStore, Record, State
 from pymq.broker.timers import TimerHeap
 
 logger = logging.getLogger(__name__)
 
-
-class _State(Enum):
-    """Where a stored message currently is."""
-
-    READY = auto()
-    DELAYED = auto()
+type DeliverySink = Callable[[LeasedMessage], None]
 
 
 @dataclass(slots=True)
-class _Record:
-    """One stored message plus the bookkeeping the heaps need.
+class _Consumer:
+    """One registered consumer and the deliveries it currently holds."""
 
-    ``epoch`` changes every time the message (re)enters the queue or is
-    dropped, so older heap entries pointing at it can be recognised as stale.
-    """
-
-    envelope: Envelope
-    state: _State
-    epoch: int
-    ready_at: float
+    sink: DeliverySink
+    prefetch: int
+    tags: set[int] = field(default_factory=lambda: set[int]())
 
 
-type _Ref = tuple[str, int]
+@dataclass(slots=True)
+class _Lease:
+    """A loan of one message to one consumer, valid until ``deadline``."""
+
+    message_id: str
+    consumer_tag: str
+    deadline: float
 
 
-class WorkQueue:
-    """Store messages for one queue: put, priority, delay, dedupe, TTL, stats.
+class WorkQueue(QueueStore):
+    """Store messages for one queue and lease them to consumers.
 
     Must be created inside a running pynet loop, which supplies the clock and
-    timers. Consumers, leases and acks are layered on top by later code through
-    the ``_dispatch`` hook and the ``_enter`` / ``_dead`` helpers.
+    timers. Delivery is at-least-once: an unsettled lease expires and the
+    message is retried, so a handler may see the same message twice.
     """
 
     def __init__(
@@ -73,253 +55,163 @@ class WorkQueue:
         on_dead: Callable[[DeadLetter], None] | None = None,
     ) -> None:
         """Create an empty queue called ``name`` using ``config``."""
-        self._name = name
-        self._config = config
-        self._on_dead = on_dead
-        self._loop = get_running_loop()
-        self._closed = False
-        self._records: dict[str, _Record] = {}
-        self._ready: list[tuple[int, int, str, int]] = []
-        self._order = itertools.count()
-        self._epochs = itertools.count(1)
-        self._counts = {_State.READY: 0, _State.DELAYED: 0}
-        self._delayed = TimerHeap[_Ref](self._loop, self._promote, self._is_delayed)
-        self._ttl = TimerHeap[_Ref](self._loop, self._expire, self._is_waiting)
-        self._seen: dict[str, float] = {}
-        self._seen_order: deque[tuple[float, str]] = deque()
-        self._dead_letters: deque[DeadLetter] = deque()
-        self._enqueued = 0
-        self._duplicates = 0
-        self._dead_lettered = 0
-        self._dead_dropped = 0
-
-    @property
-    def name(self) -> str:
-        """Return the queue name."""
-        return self._name
-
-    @property
-    def config(self) -> QueueConfig:
-        """Return the queue settings."""
-        return self._config
-
-    def put(
-        self,
-        body: JsonValue,
-        *,
-        id: str | None = None,  # noqa: A002
-        priority: int = 0,
-        headers: Mapping[str, str] | None = None,
-        attachments: Sequence[bytes] = (),
-        delay: float = 0.0,
-    ) -> PutResult:
-        """Add a message, or ignore it if its id is still queued or was seen recently.
-
-        Raises:
-            QueueNotFoundError: If the queue is closed.
-            ValueError: If ``delay`` is negative or not finite.
-            QueueFullError: If ready plus delayed messages reach ``max_length``.
-
-        """
-        self._check_open()
-        if not math.isfinite(delay) or delay < 0:
-            msg = f"delay must be finite and >= 0, got {delay!r}"
-            raise ValueError(msg)
-        message_id = id if id is not None else uuid.uuid4().hex
-        now = self._loop.time()
-        self._prune_seen(now)
-        if message_id in self._seen or message_id in self._records:
-            self._duplicates += 1
-            return PutResult(message_id, duplicate=True)
-        if self._waiting() >= self._config.max_length:
-            msg = f"queue {self._name!r} is full ({self._config.max_length})"
-            raise QueueFullError(msg)
-        expiry = now + self._config.dedupe_window
-        self._seen[message_id] = expiry
-        self._seen_order.append((expiry, message_id))
-        envelope = Envelope(
-            id=message_id,
-            queue=self._name,
-            body=body,
-            headers=dict(headers or {}),
-            attachments=tuple(attachments),
-            priority=priority,
-            attempt=0,
-            enqueued_at=utc_now_iso(),
+        super().__init__(name, config, on_dead=on_dead)
+        self._leases: dict[int, _Lease] = {}
+        self._lease_timers = TimerHeap[tuple[int, float]](
+            self._loop, self._lease_due, self._lease_live
         )
-        self._enqueued += 1
-        self._enter(envelope, delay=delay)
-        return PutResult(message_id, duplicate=False)
-
-    def ready_ids(self) -> list[str]:
-        """Return the ids of ready messages in the order they will be delivered."""
-        self._check_open()
-        live = [e for e in self._ready if self._is_ready((e[2], e[3]))]
-        return [e[2] for e in sorted(live)]
-
-    def purge(self) -> int:
-        """Drop every ready and delayed message and return how many were dropped."""
-        self._check_open()
-        dropped = len(self._records)
-        self._records.clear()
-        self._ready.clear()
-        self._delayed.clear()
-        self._ttl.clear()
-        self._counts = {_State.READY: 0, _State.DELAYED: 0}
-        return dropped
-
-    def stats(self) -> QueueStats:
-        """Return a snapshot of depths and counters."""
-        self._check_open()
-        ready_times = [r.ready_at for r in self._records.values() if r.state is _State.READY]
-        age = self._loop.time() - min(ready_times) if ready_times else None
-        return QueueStats(
-            name=self._name,
-            ready=self._counts[_State.READY],
-            delayed=self._counts[_State.DELAYED],
-            in_flight=0,
-            dead=len(self._dead_letters),
-            consumers=0,
-            oldest_ready_age=age,
-            enqueued=self._enqueued,
-            delivered=0,
-            acked=0,
-            retried=0,
-            dead_lettered=self._dead_lettered,
-            dead_dropped=self._dead_dropped,
-            duplicates=self._duplicates,
-        )
-
-    def dead_letters(self, limit: int | None = None) -> list[DeadLetter]:
-        """Return dead letters, oldest first, at most ``limit`` of them."""
-        self._check_open()
-        letters = list(self._dead_letters)
-        return letters if limit is None else letters[:limit]
-
-    def replay_dead(self, ids: Collection[str] | None = None) -> int:
-        """Move dead letters back to ready with a fresh attempt count.
-
-        ``None`` replays all of them. Unknown ids are skipped, and ``max_length``
-        is ignored. Return how many were replayed.
-        """
-        self._check_open()
-        wanted = None if ids is None else set(ids)
-        keep: deque[DeadLetter] = deque()
-        replayed = 0
-        for letter in self._dead_letters:
-            eid = letter.envelope.id
-            if (wanted is None or eid in wanted) and eid not in self._records:
-                self._enter(replace(letter.envelope, attempt=0))
-                replayed += 1
-            else:
-                keep.append(letter)
-        self._dead_letters = keep
-        return replayed
-
-    def purge_dead(self) -> int:
-        """Forget every dead letter and return how many there were."""
-        self._check_open()
-        count = len(self._dead_letters)
-        self._dead_letters.clear()
-        return count
+        self._tags = itertools.count(1)
+        self._consumers: dict[str, _Consumer] = {}
+        self._turn = 0
+        self._dispatching = False
 
     def close(self) -> None:
-        """Cancel every timer; the queue refuses all calls afterwards."""
-        self._closed = True
-        self._delayed.close()
-        self._ttl.close()
+        """Cancel every timer and drop consumers (no requeue); refuse later calls."""
+        super().close()
+        self._consumers.clear()
+        self._leases.clear()
+        self._lease_timers.close()
 
-    def _check_open(self) -> None:
-        """Raise QueueNotFoundError if the queue was closed."""
-        if self._closed:
-            msg = f"queue {self._name!r} is closed"
-            raise QueueNotFoundError(msg)
+    @property
+    def consumer_count(self) -> int:
+        """Return how many consumers are registered."""
+        return len(self._consumers)
 
-    def _waiting(self) -> int:
-        """Return the number of ready plus delayed messages."""
-        return self._counts[_State.READY] + self._counts[_State.DELAYED]
+    def add_consumer(self, consumer_tag: str, sink: DeliverySink, prefetch: int = 10) -> None:
+        """Register a consumer and start feeding it. ``sink`` must not block.
 
-    def _dispatch(self) -> None:
-        """Hand ready messages to consumers (a hook; nothing to do yet)."""
+        Raises:
+            ValueError: If ``prefetch`` is below 1 or the tag is already used.
 
-    def _enter(self, envelope: Envelope, *, delay: float = 0.0) -> None:
-        """Store ``envelope`` as ready (or delayed) and start its TTL clock."""
-        now = self._loop.time()
-        old = self._records.pop(envelope.id, None)
-        if old is not None:
-            self._counts[old.state] -= 1
-        ref: _Ref = (envelope.id, next(self._epochs))
-        record = _Record(envelope, _State.DELAYED, ref[1], now)
-        self._records[envelope.id] = record
-        if delay > 0:
-            self._counts[_State.DELAYED] += 1
-            self._delayed.push(now + delay, ref)
-        else:
-            self._make_ready(record)
-        if self._config.message_ttl is not None:
-            self._ttl.push(now + self._config.message_ttl, ref)
-        if record.state is _State.READY:
-            self._dispatch()
-
-    def _make_ready(self, record: _Record) -> None:
-        """Mark ``record`` ready and add it to the ready heap."""
-        record.state = _State.READY
-        record.ready_at = self._loop.time()
-        self._counts[_State.READY] += 1
-        envelope = record.envelope
-        heapq.heappush(
-            self._ready, (envelope.priority, next(self._order), envelope.id, record.epoch)
-        )
-
-    def _dead(self, envelope: Envelope, reason: DeadReason, error: str | None = None) -> None:
-        """Record a dead letter, trim the list to its cap and tell ``on_dead``."""
-        letter = DeadLetter(envelope, reason, utc_now_iso(), error)
-        self._dead_letters.append(letter)
-        self._dead_lettered += 1
-        while len(self._dead_letters) > self._config.max_dead_letters:
-            self._dead_letters.popleft()
-            self._dead_dropped += 1
-        if self._on_dead is not None:
-            try:
-                self._on_dead(letter)
-            except Exception:
-                logger.exception("on_dead callback failed for queue %r", self._name)
-
-    def _prune_seen(self, now: float) -> None:
-        """Forget ids whose dedupe window has passed."""
-        while self._seen_order and self._seen_order[0][0] <= now:
-            expiry, message_id = self._seen_order.popleft()
-            if self._seen.get(message_id) == expiry:
-                del self._seen[message_id]
-
-    def _record_for(self, ref: _Ref) -> _Record | None:
-        """Return the record ``ref`` points at, or None if the ref is stale."""
-        record = self._records.get(ref[0])
-        return record if record is not None and record.epoch == ref[1] else None
-
-    def _is_delayed(self, ref: _Ref) -> bool:
-        """Return whether ``ref`` is a live delayed message."""
-        record = self._record_for(ref)
-        return record is not None and record.state is _State.DELAYED
-
-    def _is_ready(self, ref: _Ref) -> bool:
-        """Return whether ``ref`` is a live ready message."""
-        record = self._record_for(ref)
-        return record is not None and record.state is _State.READY
-
-    def _is_waiting(self, ref: _Ref) -> bool:
-        """Return whether ``ref`` is a live ready or delayed message."""
-        return self._record_for(ref) is not None
-
-    def _promote(self, ref: _Ref) -> None:
-        """Move a delayed message to ready when its time comes."""
-        record = self._records[ref[0]]
-        self._counts[_State.DELAYED] -= 1
-        self._make_ready(record)
+        """
+        self._check_open()
+        if prefetch < 1:
+            msg = f"prefetch must be >= 1, got {prefetch!r}"
+            raise ValueError(msg)
+        if consumer_tag in self._consumers:
+            msg = f"duplicate consumer tag {consumer_tag!r}"
+            raise ValueError(msg)
+        self._consumers[consumer_tag] = _Consumer(sink, prefetch)
         self._dispatch()
 
-    def _expire(self, ref: _Ref) -> None:
-        """Dead-letter a waiting message whose TTL ran out."""
-        record = self._records.pop(ref[0])
-        self._counts[record.state] -= 1
-        self._dead(record.envelope, DeadReason.TTL_EXPIRED)
+    def remove_consumer(self, consumer_tag: str) -> int:
+        """Remove a consumer, nack its leases for retry and return how many."""
+        self._check_open()
+        order = list(self._consumers)
+        consumer = self._consumers.pop(consumer_tag, None)
+        if consumer is None:
+            return 0
+        if order.index(consumer_tag) < self._turn:
+            self._turn -= 1
+        tags = sorted(consumer.tags)
+        for tag in tags:
+            self.nack(tag, error="consumer removed")
+        return len(tags)
+
+    def ack(self, delivery_tag: int) -> bool:
+        """Settle a delivery as done. Return False if it is stale."""
+        record = self._release(delivery_tag)
+        if record is None:
+            return False
+        self._acked += 1
+        self._dispatch()
+        return True
+
+    def nack(self, delivery_tag: int, *, requeue: bool = True, error: str | None = None) -> bool:
+        """Give a delivery back: retry with backoff, or dead-letter it. False if stale."""
+        record = self._release(delivery_tag)
+        if record is None:
+            return False
+        envelope = record.envelope
+        if not requeue:
+            self._dead(envelope, DeadReason.REJECTED, error)
+        elif envelope.attempt >= self._config.max_attempts:
+            self._dead(envelope, DeadReason.MAX_ATTEMPTS, error)
+        else:
+            self._retried += 1
+            self._enter(envelope, delay=self._config.retry_wait(envelope.attempt))
+        self._dispatch()
+        return True
+
+    def touch(self, delivery_tag: int) -> bool:
+        """Restart a lease's clock. Return False if the delivery is stale."""
+        lease = self._leases.get(delivery_tag)
+        if lease is None:
+            return False
+        lease.deadline = self._loop.time() + self._config.ack_timeout
+        self._lease_timers.push(lease.deadline, (delivery_tag, lease.deadline))
+        return True
+
+    def _release(self, delivery_tag: int) -> Record | None:
+        """End a lease and take its message out of the store, or None if stale."""
+        lease = self._leases.pop(delivery_tag, None)
+        if lease is None:
+            return None
+        consumer = self._consumers.get(lease.consumer_tag)
+        if consumer is not None:
+            consumer.tags.discard(delivery_tag)
+        record = self._records.pop(lease.message_id)
+        self._counts[State.LEASED] -= 1
+        return record
+
+    def _lease_live(self, item: tuple[int, float]) -> bool:
+        """Return whether the lease deadline entry is the current one."""
+        lease = self._leases.get(item[0])
+        return lease is not None and lease.deadline == item[1]
+
+    def _lease_due(self, item: tuple[int, float]) -> None:
+        """Treat an unsettled, expired lease as a nack."""
+        self.nack(item[0], error="ack timeout")
+
+    def _next_consumer(self) -> str | None:
+        """Return the next consumer with room, round-robin, and move the turn on."""
+        order = list(self._consumers)
+        for i in range(len(order)):
+            index = (self._turn + i) % len(order)
+            consumer = self._consumers[order[index]]
+            if len(consumer.tags) < consumer.prefetch:
+                self._turn = (index + 1) % len(order)
+                return order[index]
+        return None
+
+    def _pop_ready(self) -> Record | None:
+        """Pop the best live ready record, discarding stale heap entries."""
+        while self._ready:
+            _, _, message_id, epoch = heapq.heappop(self._ready)
+            record = self._record_for((message_id, epoch))
+            if record is not None and record.state is State.READY:
+                return record
+        return None
+
+    def _dispatch(self) -> None:
+        """Lease ready messages to consumers with room, in round-robin order."""
+        if self._dispatching or self._closed:
+            return
+        self._dispatching = True
+        try:
+            while self._counts[State.READY] and (tag := self._next_consumer()) is not None:
+                record = self._pop_ready()
+                if record is None:
+                    break
+                self._deliver(record, tag)
+        finally:
+            self._dispatching = False
+
+    def _deliver(self, record: Record, consumer_tag: str) -> None:
+        """Lease ``record`` to a consumer and hand it to its sink."""
+        record.envelope = replace(record.envelope, attempt=record.envelope.attempt + 1)
+        record.state = State.LEASED
+        self._counts[State.READY] -= 1
+        self._counts[State.LEASED] += 1
+        tag = next(self._tags)
+        deadline = self._loop.time() + self._config.ack_timeout
+        self._leases[tag] = _Lease(record.envelope.id, consumer_tag, deadline)
+        consumer = self._consumers[consumer_tag]
+        consumer.tags.add(tag)
+        self._lease_timers.push(deadline, (tag, deadline))
+        self._delivered += 1
+        try:
+            consumer.sink(LeasedMessage(self._name, consumer_tag, tag, record.envelope))
+        except Exception:
+            logger.exception("sink for consumer %r on queue %r failed", consumer_tag, self._name)
+            self.nack(tag, error="sink failed")

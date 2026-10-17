@@ -17,6 +17,7 @@ from pymq.broker.errors import InvalidNameError
 
 type JsonValue = _PynetJsonValue
 
+_MAX_BACKOFF_EXPONENT = 1000
 _NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,200}$")
 
 
@@ -70,7 +71,8 @@ class QueueConfig:
 
     def retry_wait(self, attempt: int) -> float:
         """Return the seconds to wait before retrying after the given attempt."""
-        return min(self.retry_delay * 2 ** (attempt - 1), self.max_retry_delay)
+        exponent = min(attempt - 1, _MAX_BACKOFF_EXPONENT)
+        return min(self.retry_delay * 2**exponent, self.max_retry_delay)
 
 
 @dataclass(frozen=True)
