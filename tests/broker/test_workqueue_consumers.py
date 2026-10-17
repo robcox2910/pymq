@@ -243,6 +243,26 @@ class TestRetries:
         run_async(main)
 
 
+def test_replay_skips_second_dead_letter_with_same_id() -> None:
+    """Replay one letter per id and leave the duplicate in the dead list."""
+
+    async def main() -> None:
+        q = WorkQueue("q", QueueConfig(dedupe_window=1.0))
+        for _ in range(TWO):
+            q.put("x", id="a")
+            q.add_consumer("A", lambda _m: None)
+            tag = next(iter(q._leases))  # pyright: ignore[reportPrivateUsage]
+            q.nack(tag, requeue=False)
+            q.remove_consumer("A")
+            await sleep(5)
+        assert q.stats().dead == TWO
+        assert q.replay_dead() == 1
+        stats = q.stats()
+        assert (stats.dead, stats.ready + stats.in_flight) == (1, 0 + 1)
+
+    run_async(main)
+
+
 def _boom(_m: LeasedMessage) -> None:
     """Raise to simulate a broken sink."""
     msg = "sink broke"

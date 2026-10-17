@@ -212,9 +212,11 @@ class QueueStore:
         wanted = None if ids is None else set(ids)
         keep: deque[DeadLetter] = deque()
         replay: list[Envelope] = []
+        chosen: set[str] = set()
         for letter in self._dead_letters:
             eid = letter.envelope.id
-            if (wanted is None or eid in wanted) and eid not in self._records:
+            if (wanted is None or eid in wanted) and eid not in self._records and eid not in chosen:
+                chosen.add(eid)
                 replay.append(replace(letter.envelope, attempt=0))
             else:
                 keep.append(letter)
