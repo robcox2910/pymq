@@ -185,6 +185,7 @@ puts the pinned release back, which is how you undo the override.
 - **Pub/Sub** -- Publish to topics, subscribers get copies
 - **Acknowledgment** -- Confirm processing or reject for retry
 - **Dead Letter Queue** -- Failed messages collected for inspection
+- **Saving Queues** -- `save_queues` / `load_queues` keep waiting messages across restarts
 - **Message Factory** -- Auto-generated UUIDs and ISO timestamps
 - **100% Typed** -- Full type annotations with strict Pyright checking
 
