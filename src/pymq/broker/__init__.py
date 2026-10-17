@@ -22,8 +22,15 @@ from pymq.broker.model import (
     utc_now_iso,
     validate_queue_name,
 )
+from pymq.broker.topics import (
+    SYSTEM_PREFIX,
+    topic_matches,
+    validate_pattern,
+    validate_topic,
+)
 
 __all__ = [
+    "SYSTEM_PREFIX",
     "BrokerError",
     "BrokerUnavailableError",
     "DeadLetter",
@@ -40,6 +47,9 @@ __all__ = [
     "QueueFullError",
     "QueueNotFoundError",
     "QueueStats",
+    "topic_matches",
     "utc_now_iso",
+    "validate_pattern",
     "validate_queue_name",
+    "validate_topic",
 ]
