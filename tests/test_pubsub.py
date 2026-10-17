@@ -1,6 +1,8 @@
 """Test the PubSub publish-subscribe messaging system."""
 
-from pymq.pubsub import PubSub
+import pytest
+
+from pymq.pubsub import DeliveryError, PubSub
 
 
 class TestPubSubSubscribe:
@@ -130,3 +132,44 @@ class TestPubSubTopics:
         """Publishing to a topic with no subscribers should not raise."""
         ps = PubSub()
         ps.publish("empty-topic", "nobody home")
+
+
+class TestOneBadSubscriberCantSpoilIt:
+    """A subscriber that crashes must not stop everyone else getting the message."""
+
+    def test_everyone_else_still_gets_the_message(self) -> None:
+        """Regression: a failing handler used to stop delivery to later subscribers."""
+        pubsub = PubSub()
+        received: list[str] = []
+
+        def broken(_topic: str, _message: str) -> None:
+            msg = "my letterbox is jammed"
+            raise RuntimeError(msg)
+
+        pubsub.subscribe("news", lambda _t, m: received.append(f"first:{m}"))
+        pubsub.subscribe("news", broken)
+        pubsub.subscribe("news", lambda _t, m: received.append(f"last:{m}"))
+        with pytest.raises(DeliveryError):
+            pubsub.publish("news", "hello")
+        assert received == ["first:hello", "last:hello"]
+
+    def test_failures_are_reported_not_hidden(self) -> None:
+        """After delivering to everyone, the publisher learns exactly who failed and why."""
+        pubsub = PubSub()
+
+        def broken(_topic: str, _message: str) -> None:
+            msg = "jammed"
+            raise RuntimeError(msg)
+
+        pubsub.subscribe("news", broken)
+        with pytest.raises(DeliveryError, match="1 subscriber") as caught:
+            pubsub.publish("news", "hello")
+        [(handler, error)] = caught.value.failures
+        assert handler is broken
+        assert str(error) == "jammed"
+
+    def test_no_error_when_everyone_is_happy(self) -> None:
+        """When every subscriber copes, publish raises nothing."""
+        pubsub = PubSub()
+        pubsub.subscribe("news", lambda _t, _m: None)
+        pubsub.publish("news", "hello")
