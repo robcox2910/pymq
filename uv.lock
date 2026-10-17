@@ -560,7 +560,7 @@ requires-dist = [
     { name = "commitizen", marker = "extra == 'dev'", specifier = ">=4.4.0" },
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.10.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.0.1" },
-    { name = "pynet", editable = "../pynet" },
+    { name = "pynet", git = "https://github.com/robcox2910/pynet?tag=v0.1.0" },
     { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1.400" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.4" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.0.0" },
@@ -571,20 +571,8 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "pynet"
-source = { editable = "../pynet" }
-
-[package.metadata]
-requires-dist = [
-    { name = "commitizen", marker = "extra == 'dev'", specifier = ">=4.4.0" },
-    { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.10.0" },
-    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.0.1" },
-    { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1.400" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.4" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.0.0" },
-    { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.3.1" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9.3" },
-]
-provides-extras = ["dev"]
+version = "0.1.0"
+source = { git = "https://github.com/robcox2910/pynet?tag=v0.1.0#c43b2e1d06533f545ec7368288d5873e07ff5c33" }
 
 [[package]]
 name = "pyparsing"

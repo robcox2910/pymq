@@ -161,6 +161,23 @@ Runnable demos live in `examples/` (`broker_demo.py`, `work_queue.py`,
 `topic_alerts.py`). The learning path starts at
 [the docs index](docs/index.md).
 
+## Developing alongside a sibling
+
+PyMQ pins its sibling PyNet to a release tag in `pyproject.toml`
+(`[tool.uv.sources]`), and `uv.lock` records the exact commit. A change merged
+into PyNet can't affect PyMQ until PyMQ chooses to upgrade.
+
+To try an unreleased change from a PyNet checkout next to this one, install it
+over the pinned release:
+
+```bash
+uv pip install -e ../pynet
+uv run --no-sync pytest
+```
+
+Use `uv run --no-sync` while you do this: a plain `uv run` (like `uv sync`)
+puts the pinned release back, which is how you undo the override.
+
 ## Releasing
 
 PyMQ follows 0.x semantic versioning: a change to the public API bumps the

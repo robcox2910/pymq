@@ -17,10 +17,8 @@ jobs:
           version: "latest"
       - name: Set up Python
         run: uv python install 3.14
-      - name: Clone pynet
-        run: cd .. && git clone --depth 1 https://github.com/robcox2910/pynet.git pynet
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: uv sync --locked --all-extras
       - name: Run ruff linter
         run: uv run ruff check .
       - name: Run ruff formatter check
@@ -38,10 +36,8 @@ jobs:
           version: "latest"
       - name: Set up Python
         run: uv python install 3.14
-      - name: Clone pynet
-        run: cd .. && git clone --depth 1 https://github.com/robcox2910/pynet.git pynet
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: uv sync --locked --all-extras
       - name: Run tests
         run: uv run pytest
 
@@ -58,9 +54,7 @@ jobs:
           version: "latest"
       - name: Set up Python
         run: uv python install 3.14
-      - name: Clone pynet
-        run: cd .. && git clone --depth 1 https://github.com/robcox2910/pynet.git pynet
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: uv sync --locked --all-extras
       - name: Run security checks (advisory)
         run: uv run pip-audit --skip-editable
