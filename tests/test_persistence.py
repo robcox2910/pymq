@@ -92,6 +92,16 @@ class TestRoundTrip:
         loaded = _round_trip(tmp_path, q)["orders"]
         assert _bodies(loaded) == ["taken", "waiting"]
 
+    def test_unacknowledged_priority_message_goes_first_in_its_band(self, tmp_path: Path) -> None:
+        """In a priority queue, a taken message rejoins ahead of its equals, behind more urgent ones."""
+        q = PriorityMessageQueue("er")
+        q.put("taken", priority=5)
+        assert q.get() is not None
+        q.put("later same", priority=5)
+        q.put("urgent", priority=1)
+        loaded = _round_trip(tmp_path, q)["er"]
+        assert _bodies(loaded) == ["urgent", "taken", "later same"]
+
     def test_several_queues_and_empty_ones(self, tmp_path: Path) -> None:
         """Every queue comes back under its own name, even an empty one."""
         a = MessageQueue("a")
@@ -164,6 +174,31 @@ class TestBadFiles:
         with pytest.raises(PersistenceError, match=re.escape(str(path))):
             load_queues(path)
         assert path.read_text(encoding="utf-8") == content
+
+    def test_file_that_is_not_text_is_refused(self, tmp_path: Path) -> None:
+        """Bytes that aren't UTF-8 text raise PersistenceError naming the file."""
+        path = tmp_path / "queues.json"
+        path.write_bytes(b"\xff\xfe{")
+        with pytest.raises(PersistenceError, match=re.escape(str(path))):
+            load_queues(path)
+
+    def test_negative_retry_limit_is_refused(self, tmp_path: Path) -> None:
+        """A retry limit below zero isn't a real setting."""
+        path = tmp_path / "queues.json"
+        path.write_text(
+            '{"queues": [{"name": "q", "kind": "fifo", "max_retries": -1,'
+            ' "waiting": [], "dead_letters": []}]}',
+            encoding="utf-8",
+        )
+        with pytest.raises(PersistenceError, match=re.escape(str(path))):
+            load_queues(path)
+
+    def test_saving_two_queues_with_one_name_is_refused(self, tmp_path: Path) -> None:
+        """Save refuses what load would refuse, so it never writes an unloadable file."""
+        path = tmp_path / "queues.json"
+        with pytest.raises(PersistenceError, match="'q'"):
+            save_queues([MessageQueue("q"), MessageQueue("q")], path)
+        assert not path.exists()
 
     def test_saved_file_is_readable_json(self, tmp_path: Path) -> None:
         """The save file is plain JSON a learner can open and read."""

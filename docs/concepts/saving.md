@@ -35,7 +35,9 @@ JSON, so you can open it and read it.
 What about a message someone picked up with `get()` but never
 acknowledged? Nobody said the job was done, so it might not have been.
 PyMQ puts those messages back at the **front** of the line when it saves,
-so they are handed out again after a restart. Real brokers such as
+so they are handed out again after a restart. (In a priority queue they go
+to the front of their own priority band: a more urgent message still goes
+first.) Real brokers such as
 RabbitMQ do the same thing.
 
 ## Never a Half-Written File
