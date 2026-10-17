@@ -139,6 +139,19 @@ uv run pytest
 Full documentation with kid-friendly explanations of every concept:
 [https://robcox2910.github.io/pymq/](https://robcox2910.github.io/pymq/)
 
+## Releasing
+
+Other projects in the series ([PyStack](https://github.com/robcox2910/pystack)) use a pinned release of this one,
+not whatever is on `main`. To publish a change for them:
+
+1. Merge the change to `main`.
+2. Tag it: `git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`.
+   A change to the public API bumps the minor version (`v0.1.0` → `v0.2.0`);
+   anything else bumps the patch (`v0.1.0` → `v0.1.1`).
+3. In each project that uses it, edit the tag in `[tool.uv.sources]`, run
+   `uv lock --upgrade-package <name>`, and open a pull request so CI checks
+   the pair together.
+
 ## Related Projects
 
 PyMQ is part of a series of educational "build it from scratch" projects:
