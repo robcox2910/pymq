@@ -443,4 +443,3 @@ class TestMaintenance:
     def test_retry_wait_survives_huge_attempts(self) -> None:
         """Cap the backoff instead of overflowing."""
         assert QueueConfig().retry_wait(BIG_ATTEMPT) == CAP
-
