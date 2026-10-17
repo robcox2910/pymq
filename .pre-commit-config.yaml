@@ -24,10 +24,18 @@ repos:
     hooks:
       - id: pyright
 
-  - repo: https://github.com/pypa/pip-audit
-    rev: v2.10.0
+  - repo: local
     hooks:
       - id: pip-audit
+        name: pip-audit
+        language: system
+        pass_filenames: false
+        files: ^(pyproject\.toml|uv\.lock)$
+        entry: >-
+          bash -c 'f=$(mktemp) &&
+          uv export --frozen --no-emit-project --all-extras --no-hashes -o "$f" >/dev/null &&
+          uvx pip-audit==2.10.0 -r "$f" --disable-pip --no-deps;
+          status=$?; rm -f "$f"; exit $status'
 
   - repo: https://github.com/rhysd/actionlint
     rev: v1.7.7

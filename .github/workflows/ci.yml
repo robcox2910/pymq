@@ -6,55 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: "latest"
-      - name: Set up Python
-        run: uv python install 3.14
-      - name: Install dependencies
-        run: uv sync --locked --all-extras
-      - name: Run ruff linter
-        run: uv run ruff check .
-      - name: Run ruff formatter check
-        run: uv run ruff format --check .
-      - name: Run pyright
-        run: uv run pyright src tests
-
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: "latest"
-      - name: Set up Python
-        run: uv python install 3.14
-      - name: Install dependencies
-        run: uv sync --locked --all-extras
-      - name: Run tests
-        run: uv run pytest
-
-  security:
-    runs-on: ubuntu-latest
-    # Advisory only: surfaces CVEs without blocking merges on upstream/transitive
-    # vulnerabilities the project cannot fix (e.g. a new CVE in pip or pytest).
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v6
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: "latest"
-      - name: Set up Python
-        run: uv python install 3.14
-      - name: Install dependencies
-        run: uv sync --locked --all-extras
-      - name: Run security checks (advisory)
-        run: uv run pip-audit --skip-editable
+  ci:
+    uses: robcox2910/robcox2910.github.io/.github/workflows/python-ci.yml@v1
