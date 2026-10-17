@@ -124,7 +124,8 @@ class BaseMessageQueue(ABC):
         """Describe the whole queue as plain data, ready to save as JSON.
 
         Messages that were taken but never acknowledged go first in the
-        waiting line: a real broker hands them out again after a restart,
+        waiting line (in a priority queue, first among messages of the same
+        priority): a real broker hands them out again after a restart,
         because nobody confirmed they were dealt with.
 
         Returns:

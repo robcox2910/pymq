@@ -6,8 +6,8 @@ away, and in the morning it puts them all back on the counter in the same
 order. That is what :func:`save_queues` and :func:`load_queues` do.
 
 Letters someone picked up but never confirmed (acknowledged) are treated as
-undelivered: they go back to the front of the line, so they are handed out
-again. Real brokers do the same, because nobody said the job was done.
+undelivered: they go back to the front of the line (in a priority queue,
+the front of their own priority band), so they are handed out again. Real brokers do the same, because nobody said the job was done.
 
 Example:
     >>> from pymq.queue import MessageQueue
@@ -49,11 +49,17 @@ def save_queues(queues: Iterable[BaseMessageQueue], filepath: str | Path) -> Non
         filepath: Path to the JSON file to create or overwrite.
 
     Raises:
-        PersistenceError: If writing to disk fails.
+        PersistenceError: If writing to disk fails, or two queues share a
+            name (the file could never be loaded back).
 
     """
     path = Path(filepath)
-    data = {"queues": [queue.to_dict() for queue in queues]}
+    entries = [queue.to_dict() for queue in queues]
+    names = [entry["name"] for entry in entries]
+    if duplicates := sorted({str(name) for name in names if names.count(name) > 1}):
+        msg = f"Cannot save queues to {path}: more than one queue is called {duplicates[0]!r}"
+        raise PersistenceError(msg)
+    data = {"queues": entries}
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(path, json.dumps(data, indent=2))
@@ -79,7 +85,7 @@ def load_queues(filepath: str | Path) -> dict[str, BaseMessageQueue]:
     path = Path(filepath)
     try:
         raw = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         msg = f"Failed to load queues from {path}: {exc}"
         raise PersistenceError(msg) from exc
     try:
@@ -119,7 +125,7 @@ def _queue_from(entry: object, path: Path) -> BaseMessageQueue:
     if not isinstance(kind, str) or kind not in _KINDS:
         msg = f"{path} is not a saved set of queues: queue {name!r} has unknown kind {kind!r}"
         raise PersistenceError(msg)
-    if not _is_int(max_retries):
+    if not _is_int(max_retries) or cast("int", max_retries) < 0:
         msg = f"{path} is not a saved set of queues: queue {name!r} has a bad max_retries"
         raise PersistenceError(msg)
     return _KINDS[kind].from_messages(
