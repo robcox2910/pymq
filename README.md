@@ -109,6 +109,68 @@ failed = q.get_dead_letter()
 print(failed.body)  # "fragile package"
 ```
 
+## The Real Post Office -- Networked Broker
+
+The bakery counter lives inside one program. A real post office has a front
+door: many programs can walk in over the network, hand over parcels, and
+wait for them to be collected. `pymq.broker` is that post office, built on
+PyNet's own event loop.
+
+Start a broker from the terminal (Ctrl-C stops it):
+
+```bash
+uv run pymq-broker --host 127.0.0.1 --port 5672 --heartbeat 5
+```
+
+Then talk to it with a `BrokerClient`. This snippet starts its own broker on
+a free port so you can paste it straight in and run it:
+
+```python
+from pynet.loop import Event, run
+
+from pymq.broker import BrokerClient, BrokerServer, Delivery, QueueConfig, TopicEvent
+
+
+async def main() -> None:
+    async with BrokerServer() as server:  # picks a free port; use pymq-broker for a real one
+        async with BrokerClient("127.0.0.1", server.port) as mq:
+            await mq.declare_queue("jobs", QueueConfig(ack_timeout=60))
+            await mq.declare_queue("audit")
+            done = Event()
+
+            async def work(d: Delivery) -> None:
+                print(d.body)  # returning normally acks; raising nacks
+                done.set()
+
+            async def on_event(e: TopicEvent) -> None:
+                print("alert:", e.topic)
+
+            await mq.consume("jobs", work, prefetch=4)
+            await mq.subscribe("job.*.failed", on_event)
+            await mq.bind("job.#", "audit")
+            await mq.put("jobs", {"job": "nightly-report"}, delay=0.1)
+            await mq.publish("job.nightly.failed", "disk full")
+            await done.wait()
+            print("audit queue holds:", (await mq.stats("audit")).ready)
+
+
+run(main())
+```
+
+Runnable demos live in `examples/` (`broker_demo.py`, `work_queue.py`,
+`topic_alerts.py`). The learning path starts at
+[the docs index](docs/index.md).
+
+## Releasing
+
+PyMQ follows 0.x semantic versioning: a change to the public API bumps the
+**minor** version (0.2.0 to 0.3.0); anything else bumps the **patch**
+version. To release, merge to `main`, then tag and push:
+
+```bash
+git tag vX.Y.Z && git push origin vX.Y.Z
+```
+
 ## Features
 
 - **FIFO Queue** -- First-in, first-out message storage

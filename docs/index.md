@@ -47,11 +47,10 @@ When a consumer takes a message, they **acknowledge** it to say
 "I got it, you can delete it." If processing fails, the consumer can
 **reject** the message to send it back on the queue for another try.
 
-> **Heads up:** PyMQ has no automatic "visibility timeout." A message
-> stays in-flight until the consumer explicitly acknowledges or rejects
-> it. If a consumer crashes without doing either, the message is *not*
-> redelivered on its own -- it simply stays in-flight. Adding a timeout
-> that redelivers abandoned messages is a great exercise to try yourself!
+> **Good news:** the networked broker (see Part 2 below) has **leases**.
+> If a consumer crashes or hangs without acknowledging, the lease runs out
+> and the message goes to another consumer on its own. Read
+> [Leases and Acks](concepts/leases-and-acks.md) to see how.
 
 ## Our Building Blocks
 
@@ -65,6 +64,27 @@ When a consumer takes a message, they **acknowledge** it to say
 | **Priority Queue** | Express lane | Urgent messages first |
 | **Dead Letter Queue** | Returned mail | Failed messages go here |
 | **Acknowledgment** | Signing for a package | Confirm you processed it |
+
+## Part 2: A Real Post Office
+
+The bakery counter lives inside one program. A real post office has a
+building, a front door and many customers walking in from different
+streets. Part 2 grows PyMQ into a **networked broker** that runs on
+PyNet's own event loop. Read these in order:
+
+1. [The Broker](concepts/broker.md) -- the sorting room behind the counter
+2. [Topics and Wildcards](concepts/topics-and-wildcards.md) -- the notice board
+3. [Leases and Acks](concepts/leases-and-acks.md) -- borrowing a parcel for a while
+4. [Retries and Delays](concepts/retries-and-delays.md) -- trying again, a little later
+5. [Dead Letters v2](concepts/dead-letters-v2.md) -- the returned-mail shelf
+6. [Fair Dispatch](concepts/fair-dispatch.md) -- no clerk gets all the parcels
+7. [Idempotency](concepts/idempotency.md) -- sending twice, delivered once
+8. [Bindings](concepts/bindings.md) -- standing orders from the notice board
+9. [Slow Subscribers](concepts/slow-subscribers.md) -- the full letterbox
+10. [Reconnecting Clients](concepts/reconnecting-clients.md) -- walking back in after the door closed
+
+Want to see it run? Try the scripts in the `examples/` folder, or start a
+broker with `pymq-broker`.
 
 ## Let's Start!
 

@@ -26,6 +26,9 @@ dependencies = [
 [tool.uv.sources]
 pynet = { path = "../pynet", editable = true }
 
+[project.scripts]
+pymq-broker = "pymq.broker.__main__:main"
+
 [project.urls]
 Homepage = "https://github.com/robcox2910/pymq"
 Repository = "https://github.com/robcox2910/pymq"
@@ -83,6 +86,7 @@ max-args = 9
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101", "SLF001"]
+"examples/**/*.py" = ["T201"]
 
 [tool.ruff.format]
 quote-style = "double"
