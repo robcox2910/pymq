@@ -11,3 +11,4 @@ htmlcov/
 .DS_Store
 src/pymq/_version.py
 site/
+.superpowers/
