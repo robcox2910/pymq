@@ -3,6 +3,7 @@
 import logging
 
 import pytest
+from pynet.loop import sleep
 
 from pymq.broker import (
     Broker,
@@ -19,6 +20,7 @@ from tests.broker.helpers import run_async
 
 TWO = 2
 THREE = 3
+LONG_WAIT = 100.0
 
 
 class TestQueues:
@@ -259,5 +261,74 @@ class TestDeadEvents:
             assert len(got) == TWO
             assert got[1].envelope.headers["topic"] == "$sys.dead.q"
             assert broker.stats("q").enqueued == TWO
+
+        run_async(main)
+
+    def test_dying_dead_notice_is_not_announced_again(self) -> None:
+        """Stop when the event copy itself dies: no new copy is enqueued."""
+
+        async def main() -> None:
+            broker = Broker()
+            broker.declare_queue("q", QueueConfig(max_attempts=1))
+            broker.bind("#", "q")
+            got: list[LeasedMessage] = []
+            broker.consume("q", got.append)
+            broker.put("q", "x")
+            assert broker.nack("q", got[0].delivery_tag)
+            assert broker.nack("q", got[1].delivery_tag)
+            assert len(got) == TWO
+            assert broker.stats("q").enqueued == TWO
+            assert broker.stats("q").dead_lettered == TWO
+
+        run_async(main)
+
+    def test_expiring_dead_notice_does_not_loop(self) -> None:
+        """Keep a TTL-expiring catch-all queue bounded over a long wait."""
+
+        async def main() -> None:
+            broker = Broker()
+            broker.declare_queue("q", QueueConfig(max_attempts=1, message_ttl=1.0))
+            broker.bind("#", "q")
+            broker.put("q", "x")
+            await sleep(LONG_WAIT)
+            assert broker.stats("q").enqueued == TWO
+            assert broker.stats("q").dead_lettered == TWO
+
+        run_async(main)
+
+    def test_two_catch_all_queues_stay_bounded(self) -> None:
+        """Stop two catch-all queues from ping-ponging death notices."""
+
+        async def main() -> None:
+            broker = Broker()
+            for name in ("a", "b"):
+                broker.declare_queue(name, QueueConfig(max_attempts=1, message_ttl=1.0))
+                broker.bind("#", name)
+            broker.put("a", "x")
+            await sleep(LONG_WAIT)
+            assert broker.stats("a").enqueued == TWO
+            assert broker.stats("b").enqueued == 1
+
+        run_async(main)
+
+    def test_raising_sink_on_catch_all_queue_is_bounded(self) -> None:
+        """Keep a consumer whose sink always raises from looping forever."""
+
+        async def main() -> None:
+            broker = Broker()
+            broker.declare_queue("q", QueueConfig(max_attempts=1))
+            broker.bind("#", "q")
+            calls: list[int] = []
+
+            def bad(msg: LeasedMessage) -> None:
+                calls.append(msg.delivery_tag)
+                text = "boom"
+                raise RuntimeError(text)
+
+            broker.consume("q", bad)
+            broker.put("q", "x")
+            await sleep(LONG_WAIT)
+            assert len(calls) == TWO
+            assert broker.stats("q").dead_lettered == TWO
 
         run_async(main)

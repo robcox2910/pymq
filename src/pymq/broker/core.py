@@ -249,7 +249,14 @@ class Broker:
             logger.exception("subscriber %r failed on topic %r", sub_id, event.topic)
 
     def _announce_dead(self, queue: str, letter: DeadLetter) -> None:
-        """Publish a ``$sys.dead.<queue>`` event for a dead letter."""
+        """Publish a ``$sys.dead.<queue>`` event for a dead letter.
+
+        A dead letter that is itself a copy of a death notice (a queue bound
+        to ``#`` catches those too) is not announced again, otherwise every
+        death would breed another one forever.
+        """
+        if letter.envelope.headers.get("topic", "").startswith(f"{SYSTEM_PREFIX}.dead."):
+            return
         body: JsonValue = {
             "queue": queue,
             "id": letter.envelope.id,
