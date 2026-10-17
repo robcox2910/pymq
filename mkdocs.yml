@@ -1,0 +1,78 @@
+site_name: PyMQ
+site_url: https://robcox2910.github.io/pymq/
+repo_url: https://github.com/robcox2910/pymq
+repo_name: robcox2910/pymq
+
+# theme:start
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: deep-purple
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: deep-purple
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - navigation.sections
+    - navigation.expand
+    - toc.integrate
+    - search.highlight
+# theme:end
+
+exclude_docs: |
+  superpowers/
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - tables
+
+nav:
+  - Home: index.md
+  - Bindings (A PO Box While You Are on Holiday): concepts/bindings.md
+  - The Broker (The Sorting Room): concepts/broker.md
+  - Dead Letter Queue: concepts/dead-letter.md
+  - "Dead Letters, Take Two (The Lost Property Office)": concepts/dead-letters-v2.md
+  - Fair Dispatch (Buffet Plates): concepts/fair-dispatch.md
+  - Idempotency (Safe to Send Twice): concepts/idempotency.md
+  - Leases and Acks (Borrowing a Message): concepts/leases-and-acks.md
+  - Priority Queue: concepts/priority.md
+  - Pub/Sub: concepts/pubsub.md
+  - Queues: concepts/queues.md
+  - Reconnecting Clients (Ringing Back After the Line Drops): concepts/reconnecting-clients.md
+  - Retries and Delays (The Snooze Button): concepts/retries-and-delays.md
+  - Slow Subscribers (The Overflowing Letterbox): concepts/slow-subscribers.md
+  - Topics and Wildcards: concepts/topics-and-wildcards.md
+  # series-nav:start
+  - The series:
+      - Series home: https://robcox2910.github.io/
+      - PyOS: https://robcox2910.github.io/py-os/
+      - Pebble: https://robcox2910.github.io/pebble-lang/
+      - PyDB: https://robcox2910.github.io/pydb/
+      - PyKV: https://robcox2910.github.io/pykv/
+      - PyDocDB: https://robcox2910.github.io/pydoc-db/
+      - PyGraphDB: https://robcox2910.github.io/pygraphdb/
+      - PyTSDB: https://robcox2910.github.io/pytsdb/
+      - PyVecDB: https://robcox2910.github.io/pyvecdb/
+      - PyColDB: https://robcox2910.github.io/pycoldb/
+      - PyCrypt: https://robcox2910.github.io/pycrypt/
+      - PyNet: https://robcox2910.github.io/pynet/
+      - PyWeb: https://robcox2910.github.io/pyweb/
+      - PyGit: https://robcox2910.github.io/pygit/
+      - PySearch: https://robcox2910.github.io/pysearch/
+      - "[You are here] PyMQ": https://robcox2910.github.io/pymq/
+      - PyLLM: https://robcox2910.github.io/pyllm/
+      - PyStack: https://robcox2910.github.io/pystack/
+  # series-nav:end
