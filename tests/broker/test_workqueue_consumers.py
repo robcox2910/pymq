@@ -107,6 +107,27 @@ class TestDispatch:
 class TestAck:
     """Check acknowledging."""
 
+    def test_settle_with_wrong_consumer_tag_is_stale(self) -> None:
+        """Refuse ack, nack and touch naming another consumer; keep its lease."""
+
+        async def main() -> None:
+            q = WorkQueue("q", QueueConfig())
+            got_a: list[LeasedMessage] = []
+            got_b: list[LeasedMessage] = []
+            q.add_consumer("A", got_a.append, prefetch=1)
+            q.add_consumer("B", got_b.append, prefetch=1)
+            q.put("for A")
+            q.put("for B")
+            b_tag = got_b[0].delivery_tag
+            assert q.touch(b_tag, consumer_tag="A") is False
+            assert q.nack(b_tag, consumer_tag="A") is False
+            assert q.ack(b_tag, consumer_tag="A") is False
+            assert q.stats().in_flight == TWO
+            assert q.touch(b_tag, consumer_tag="B") is True
+            assert q.ack(b_tag, consumer_tag="B") is True
+
+        run_async(main)
+
     def test_ack_removes_message(self) -> None:
         """Remove an acked message for good."""
 

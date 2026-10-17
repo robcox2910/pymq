@@ -108,18 +108,33 @@ class WorkQueue(QueueStore):
             self.nack(tag, error="consumer removed")
         return len(tags)
 
-    def ack(self, delivery_tag: int) -> bool:
-        """Settle a delivery as done. Return False if it is stale."""
-        record = self._release(delivery_tag)
+    def ack(self, delivery_tag: int, *, consumer_tag: str | None = None) -> bool:
+        """Settle a delivery as done. Return False if it is stale.
+
+        With ``consumer_tag``, a lease held by a different consumer counts
+        as stale and is left untouched.
+        """
+        record = self._release(delivery_tag, consumer_tag)
         if record is None:
             return False
         self._acked += 1
         self._dispatch()
         return True
 
-    def nack(self, delivery_tag: int, *, requeue: bool = True, error: str | None = None) -> bool:
-        """Give a delivery back: retry with backoff, or dead-letter it. False if stale."""
-        record = self._release(delivery_tag)
+    def nack(
+        self,
+        delivery_tag: int,
+        *,
+        requeue: bool = True,
+        error: str | None = None,
+        consumer_tag: str | None = None,
+    ) -> bool:
+        """Give a delivery back: retry with backoff, or dead-letter it. False if stale.
+
+        With ``consumer_tag``, a lease held by a different consumer counts
+        as stale and is left untouched.
+        """
+        record = self._release(delivery_tag, consumer_tag)
         if record is None:
             return False
         envelope = record.envelope
@@ -133,20 +148,32 @@ class WorkQueue(QueueStore):
         self._dispatch()
         return True
 
-    def touch(self, delivery_tag: int) -> bool:
-        """Restart a lease's clock. Return False if the delivery is stale."""
-        lease = self._leases.get(delivery_tag)
+    def touch(self, delivery_tag: int, *, consumer_tag: str | None = None) -> bool:
+        """Restart a lease's clock. Return False if the delivery is stale.
+
+        With ``consumer_tag``, a lease held by a different consumer counts
+        as stale and is left untouched.
+        """
+        lease = self._lease(delivery_tag, consumer_tag)
         if lease is None:
             return False
         lease.deadline = self._loop.time() + self._config.ack_timeout
         self._lease_timers.push(lease.deadline, (delivery_tag, lease.deadline))
         return True
 
-    def _release(self, delivery_tag: int) -> Record | None:
+    def _lease(self, delivery_tag: int, consumer_tag: str | None) -> _Lease | None:
+        """Return the live lease, or None if unknown or held by another consumer."""
+        lease = self._leases.get(delivery_tag)
+        if lease is None or (consumer_tag is not None and lease.consumer_tag != consumer_tag):
+            return None
+        return lease
+
+    def _release(self, delivery_tag: int, consumer_tag: str | None = None) -> Record | None:
         """End a lease and take its message out of the store, or None if stale."""
-        lease = self._leases.pop(delivery_tag, None)
+        lease = self._lease(delivery_tag, consumer_tag)
         if lease is None:
             return None
+        del self._leases[delivery_tag]
         consumer = self._consumers.get(lease.consumer_tag)
         if consumer is not None:
             consumer.tags.discard(delivery_tag)

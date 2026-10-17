@@ -104,6 +104,27 @@ class TestQueues:
 
         run_async(main)
 
+    def test_ack_checks_consumer_tag(self) -> None:
+        """Treat consumer A's ack of consumer B's delivery as stale; B can still ack."""
+
+        async def main() -> None:
+            broker = Broker()
+            broker.declare_queue("q")
+            got_a: list[LeasedMessage] = []
+            got_b: list[LeasedMessage] = []
+            tag_a = broker.consume("q", got_a.append, prefetch=1)
+            tag_b = broker.consume("q", got_b.append, prefetch=1)
+            broker.put("q", "one")
+            broker.put("q", "two")
+            b_delivery = got_b[0].delivery_tag
+            assert broker.ack("q", b_delivery, consumer_tag=tag_a) is False
+            assert broker.nack("q", b_delivery, consumer_tag=tag_a) is False
+            assert broker.touch("q", b_delivery, consumer_tag=tag_a) is False
+            assert broker.stats("q").in_flight == TWO
+            assert broker.ack("q", b_delivery, consumer_tag=tag_b) is True
+
+        run_async(main)
+
     def test_close(self) -> None:
         """Forget everything on close."""
 

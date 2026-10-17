@@ -140,19 +140,27 @@ class Broker:
             return 0
         return queue.remove_consumer(consumer_tag)
 
-    def ack(self, queue: str, delivery_tag: int) -> bool:
-        """Settle a delivery as done. False if stale."""
-        return self._queue(queue).ack(delivery_tag)
+    def ack(self, queue: str, delivery_tag: int, *, consumer_tag: str | None = None) -> bool:
+        """Settle a delivery as done. False if stale (or held by another consumer)."""
+        return self._queue(queue).ack(delivery_tag, consumer_tag=consumer_tag)
 
     def nack(
-        self, queue: str, delivery_tag: int, *, requeue: bool = True, error: str | None = None
+        self,
+        queue: str,
+        delivery_tag: int,
+        *,
+        requeue: bool = True,
+        error: str | None = None,
+        consumer_tag: str | None = None,
     ) -> bool:
-        """Give a delivery back. False if stale."""
-        return self._queue(queue).nack(delivery_tag, requeue=requeue, error=error)
+        """Give a delivery back. False if stale (or held by another consumer)."""
+        return self._queue(queue).nack(
+            delivery_tag, requeue=requeue, error=error, consumer_tag=consumer_tag
+        )
 
-    def touch(self, queue: str, delivery_tag: int) -> bool:
-        """Renew a lease. False if stale."""
-        return self._queue(queue).touch(delivery_tag)
+    def touch(self, queue: str, delivery_tag: int, *, consumer_tag: str | None = None) -> bool:
+        """Renew a lease. False if stale (or held by another consumer)."""
+        return self._queue(queue).touch(delivery_tag, consumer_tag=consumer_tag)
 
     def publish(
         self,

@@ -307,6 +307,38 @@ class TestOwnership:
         run_net(main)
 
 
+class TestDeliveryOwnership:
+    """Check a connection cannot settle a delivery leased to another connection."""
+
+    def test_ack_of_other_connections_delivery_is_stale(self) -> None:
+        """Refuse an ack naming our own consumer but another connection's delivery."""
+
+        async def main() -> None:
+            async with BrokerServer(heartbeat_interval=None) as server:
+                one = await client(server.port)
+                two = await client(server.port)
+                await one.call(p.QUEUE_DECLARE, {"name": "q"})
+                start: JsonValue = {"queue": "q", "prefetch": 1}
+                tag_one = (await one.call(p.CONSUME_START, start))["consumer_tag"]
+                await wait_until(lambda: server.broker.stats("q").consumers == 1)
+                tag_two = (await two.call(p.CONSUME_START, start))["consumer_tag"]
+                await one.call(p.MSG_PUT, {"queue": "q", "body": "first"})
+                await one.call(p.MSG_PUT, {"queue": "q", "body": "second"})
+                await wait_until(lambda: len(one.deliveries) == 1 and len(two.deliveries) == 1)
+                theirs = _field(two.deliveries[0], "delivery_tag")
+                forged = {"queue": "q", "consumer_tag": tag_one, "delivery_tag": theirs}
+                assert await one.call(p.MSG_ACK, forged) == {"stale": True}
+                assert await one.call(p.MSG_NACK, forged) == {"stale": True}
+                assert await one.call(p.MSG_TOUCH, forged) == {"stale": True}
+                assert server.broker.stats("q").in_flight == TWO
+                own = {"queue": "q", "consumer_tag": tag_two, "delivery_tag": theirs}
+                assert await two.call(p.MSG_ACK, own) == {"stale": False}
+                await one.close()
+                await two.close()
+
+        run_net(main)
+
+
 class TestLifecycle:
     """Check starting, closing and broker ownership."""
 

@@ -126,17 +126,18 @@ class Connection:
         )
         return {"id": result.id, "duplicate": result.duplicate}
 
-    def _owned(self, msg: Message) -> tuple[str, int] | None:
-        """Return ``(queue, delivery_tag)`` if this connection owns the consumer."""
+    def _owned(self, msg: Message) -> tuple[str, int, str] | None:
+        """Return ``(queue, delivery_tag, consumer_tag)`` if this connection owns the consumer."""
         queue = p.req_str(msg.body, "queue")
         tag = p.req_str(msg.body, "consumer_tag")
         delivery_tag = p.req_int(msg.body, "delivery_tag")
         if self._consumers.get(tag) != queue:
             return None
-        return queue, delivery_tag
+        return queue, delivery_tag, tag
 
-    def _settle(self, owned: tuple[str, int] | None, act: Callable[[str, int], bool]) -> Json:
-        """Run ``act`` on an owned delivery; unowned or deleted-queue means stale."""
+    @staticmethod
+    def _settle(owned: tuple[str, int, str] | None, act: Callable[[str, int, str], bool]) -> Json:
+        """Run ``act`` on an owned delivery; unowned, another consumer's or deleted means stale."""
         if owned is None:
             return {"stale": True}
         try:
@@ -145,21 +146,26 @@ class Connection:
             return {"stale": True}
 
     def _ack(self, msg: Message) -> Json:
-        """Ack an owned delivery."""
-        return self._settle(self._owned(msg), self._broker.ack)
+        """Ack a delivery held by one of this connection's consumers."""
+        return self._settle(
+            self._owned(msg), lambda q, d, c: self._broker.ack(q, d, consumer_tag=c)
+        )
 
     def _nack(self, msg: Message) -> Json:
-        """Nack an owned delivery."""
+        """Nack a delivery held by one of this connection's consumers."""
         owned = self._owned(msg)
         requeue = p.opt_bool(msg.body, "requeue") is not False
         error = p.opt_str(msg.body, "error")
         return self._settle(
-            owned, lambda q, tag: self._broker.nack(q, tag, requeue=requeue, error=error)
+            owned,
+            lambda q, d, c: self._broker.nack(q, d, requeue=requeue, error=error, consumer_tag=c),
         )
 
     def _touch(self, msg: Message) -> Json:
-        """Renew an owned delivery's lease."""
-        return self._settle(self._owned(msg), self._broker.touch)
+        """Renew a lease held by one of this connection's consumers."""
+        return self._settle(
+            self._owned(msg), lambda q, d, c: self._broker.touch(q, d, consumer_tag=c)
+        )
 
     def _consume(self, msg: Message) -> Json:
         """Start a consumer whose deliveries go through this connection's outbox."""
