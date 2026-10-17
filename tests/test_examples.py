@@ -10,7 +10,7 @@ EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
 EXAMPLE_FILES = sorted(EXAMPLES_DIR.glob("*.py"))
 KEY_LINES = {
     "broker_demo": "dead letters: 1",
-    "work_queue": "all jobs done",
+    "work_queue": "bob finished job-0 (attempt 2)",
     "topic_alerts": "alerts queue holds: 2",
 }
 
