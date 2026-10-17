@@ -1,5 +1,6 @@
 """Tests for the BrokerServer over real localhost sockets."""
 
+import socket
 from collections.abc import Callable, Coroutine
 from typing import Any
 
@@ -20,10 +21,13 @@ WAIT = 2.0
 LONG_WAIT = 8.0
 TWO = 2
 CONNECTIONS = 3
-EVENTS = 2_000
+BATCH = 500
+MAX_BYTES = 64 * 1024 * 1024
 JOBS = 10
+SMALL_RCVBUF = 4_096
 STALLED_MAX_PENDING = 5
 EVENT_BODY = "x" * 1_000
+MAX_EVENTS = MAX_BYTES // len(EVENT_BODY)
 RETRY_DELAY = 0.01
 
 
@@ -389,27 +393,39 @@ class TestSlowSubscribers:
                     writer.write(encode_frame(frame))
                 await writer.drain()
                 await wait_until(lambda: server.broker.broker_stats().subscriptions == 1)
+                # Shrink S's receive buffer: Linux autotunes it to several MB.
+                fd = writer.get_extra_info("fd")
+                assert isinstance(fd, int)
+                with socket.fromfd(fd, socket.AF_INET, socket.SOCK_STREAM) as raw:
+                    raw.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SMALL_RCVBUF)
 
                 fast = await client(server.port)
-                await fast.call(p.TOPIC_SUBSCRIBE, {"pattern": "#", "max_pending": EVENTS})
+                await fast.call(p.TOPIC_SUBSCRIBE, {"pattern": "#", "max_pending": MAX_EVENTS})
                 await fast.call(p.QUEUE_DECLARE, {"name": "jobs"})
                 await fast.call(p.CONSUME_START, {"queue": "jobs", "prefetch": JOBS})
 
                 producer = await client(server.port)
-                for n in range(EVENTS):
-                    await producer.call(
-                        p.TOPIC_PUBLISH, {"topic": "news.daily", "body": EVENT_BODY}
-                    )
-                    if n % (EVENTS // JOBS) == 0:
-                        await producer.call(p.MSG_PUT, {"queue": "jobs", "body": n})
+                sent = 0
+                drops = 0
+                while sent < MAX_EVENTS and drops == 0:
+                    for _ in range(BATCH):
+                        await producer.call(
+                            p.TOPIC_PUBLISH, {"topic": "news.daily", "body": EVENT_BODY}
+                        )
+                        sent += 1
+                        if sent <= JOBS:
+                            await producer.call(p.MSG_PUT, {"queue": "jobs", "body": sent})
+                    batch_stats = await producer.call(p.BROKER_STATS)
+                    batch_drops = batch_stats["event_drops"]
+                    assert isinstance(batch_drops, int)
+                    drops = batch_drops
 
+                total = sent
                 await wait_until(
-                    lambda: len(fast.events) == EVENTS and len(fast.deliveries) == JOBS,
+                    lambda: len(fast.events) == total and len(fast.deliveries) == JOBS,
                     LONG_WAIT,
                 )
                 stats = await producer.call(p.BROKER_STATS)
-                drops = stats["event_drops"]
-                assert isinstance(drops, int)
                 assert drops > 0
                 assert stats["connections"] == CONNECTIONS
                 writer.abort()
