@@ -81,3 +81,7 @@ stats: BrokerStats(queues=1, subscriptions=1, bindings=0, binding_drops=0)
 ## What's Next?
 
 The broker is served over the network by later pieces of PyMQ.
+
+## See also
+
+- [PyStack](https://robcox2910.github.io/pystack/) -- the `mqnet` demo visits the broker's networked post office: a worker crashes and its job goes to another.
