@@ -103,7 +103,14 @@ class Delivery:
         }
 
     async def ack(self) -> bool:
-        """Acknowledge the message; return False if stale or already settled."""
+        """Acknowledge the message; return False if stale or already settled.
+
+        The delivery counts as settled as soon as this is called, even if the
+        request then fails or times out (``TimeoutError``). In that case the
+        broker may never have heard the ack: the lease runs out and the
+        message comes back (at-least-once), and a second ``ack`` on this
+        handle just returns False.
+        """
         if self._settled:
             return False
         self._settled = True
@@ -111,6 +118,11 @@ class Delivery:
 
     async def nack(self, *, requeue: bool = True, error: str | None = None) -> bool:
         """Hand the message back (to retry, or dead-letter it if ``requeue`` is False).
+
+        The delivery counts as settled as soon as this is called, even if the
+        request then fails or times out (``TimeoutError``); the broker may
+        not have heard it, so the lease runs out and the message comes back
+        (at-least-once).
 
         Returns:
             False if the lease was stale or the delivery was already settled.
@@ -126,7 +138,13 @@ class Delivery:
         return await self._settle(self, MSG_NACK, body)
 
     async def touch(self) -> bool:
-        """Renew the lease; return False if stale or already settled."""
+        """Renew the lease; return False if stale or already settled.
+
+        A touch that fails or times out (``TimeoutError``) may not have
+        reached the broker, so the lease keeps its old deadline; if it runs
+        out the message comes back (at-least-once). Unlike ack and nack, a
+        touch never marks the delivery settled.
+        """
         if self._settled:
             return False
         return await self._settle(self, MSG_TOUCH, self._ids())

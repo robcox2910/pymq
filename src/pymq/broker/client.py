@@ -124,6 +124,13 @@ class BrokerClient:
 
         Pushes that land while the line is being closed are dropped: no new
         handler or subscription worker starts once ``close`` has begun.
+
+        Handlers still running are cancelled, auto-ack ones included, so a
+        delivery whose handler had not yet been acked (even one that had
+        just finished its work) is not acked. The broker takes its lease
+        back when the line closes and hands it out again: delivery is
+        at-least-once, so that work may be done twice. Settle by hand and
+        wait for your handlers before closing if that matters.
         """
         if self._closed:
             return

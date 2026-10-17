@@ -60,6 +60,30 @@ While the line is down:
   and subscription ids, so `Consumer.tag` and `Subscription.sub_id` are
   `None` while the line is down and get their new values after the replay.
 
+When the line is **up but the broker is slow** (your friend answered but
+has gone quiet), the errors are different:
+
+- **Ordinary requests raise `TimeoutError`** once `request_timeout` has
+  passed with no answer. `BrokerUnavailableError` means "there is no
+  line"; `TimeoutError` means "there is a line, but no answer came in
+  time". The request may still have happened on the broker.
+- **`put` still raises `BrokerUnavailableError`** after `put_timeout`, line
+  or no line: it keeps trying until its own clock runs out, and then
+  reports that it got no answer.
+- **`ack`, `nack` and `touch` raise `TimeoutError`** too. An `ack` or
+  `nack` marks the `Delivery` settled as soon as you call it, even if the
+  request then fails, so calling it again just returns `False`. If the
+  broker never heard it, the lease runs out and the message comes back:
+  delivery is *at-least-once*.
+
+**Closing the client stops your handlers.** `close()` cancels every
+handler that is still running, auto-ack ones included. A delivery whose
+handler had not been acked yet is not acked at all, even if the handler
+had just finished its work. The broker takes the lease back when the line
+closes and hands the message out again, so that work may be done twice.
+If that matters, wait for your handlers (or settle by hand) before you
+close.
+
 Here a broker keeps running while its server (the phone line) restarts on
 the same port:
 

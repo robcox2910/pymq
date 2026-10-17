@@ -14,7 +14,10 @@ The `Broker` is that sorting room, in three layers:
 3. **Bindings**: standing orders that copy announcements into queues.
 
 The broker also announces on `$sys.dead.<queue>` whenever a message dies, so
-you can watch for trouble.
+you can watch for trouble. A queue bound to a catch-all pattern like `#`
+receives those announcements too. If such a copy dies in its turn, it is
+*not* announced again: otherwise every death would breed another
+announcement, forever.
 
 **The broker forgets everything when it restarts.** The scheduler keeps the
 real records; the broker is just a fast sorting room.
@@ -70,7 +73,9 @@ stats: BrokerStats(queues=1, subscriptions=1, bindings=0, binding_drops=0)
 - Publishing reaches two subscribers and a bound queue.
 - A raising subscriber does not stop the rest.
 - A rejected nack publishes `$sys.dead.jobs` with the reason.
-- A queue bound to `#` gets exactly one copy of its own death event.
+- A queue bound to `#` gets exactly one copy of its own death event, and
+  when that copy dies too (nack, TTL or a raising consumer) nothing new is
+  announced; two catch-all queues do not ping-pong announcements.
 - Deleting a queue forgets its bindings and consumer tags.
 
 ## What's Next?

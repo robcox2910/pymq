@@ -9,6 +9,7 @@ from pynet.loop import sleep
 from pymq.broker import (
     DeadLetter,
     DeadReason,
+    LeasedMessage,
     QueueConfig,
     QueueFullError,
     QueueNotFoundError,
@@ -24,6 +25,7 @@ TTL = 10.0
 SMALL_LIMIT = 2
 THREE = 3
 TWO = 2
+HANDED_BACK_AT = 6.0
 
 
 class TestOrdering:
@@ -201,6 +203,28 @@ class TestTtl:
             assert (s.delayed, s.dead) == (0, 1)
             await sleep(TTL * TWO)
             assert q.stats().ready == 0
+
+        run_async(main)
+
+    def test_ttl_restarts_when_message_comes_back(self) -> None:
+        """Start the TTL clock again on a retry and on a dead-letter replay."""
+
+        async def main() -> None:
+            q = WorkQueue("q", QueueConfig(message_ttl=TTL, retry_delay=1.0))
+            q.put("a", id="a")
+            await sleep(HANDED_BACK_AT)
+            got: list[LeasedMessage] = []
+            q.add_consumer("c", got.append)
+            q.remove_consumer("c")  # back for a retry: the clock restarts
+            await sleep(TTL - 1.0)  # past the first deadline, inside the new one
+            assert (q.stats().ready, q.stats().dead) == (1, 0)
+            await sleep(TWO)
+            assert q.stats().dead == 1
+            assert q.replay_dead() == 1  # a replay restarts it too
+            await sleep(TTL - 1.0)
+            assert (q.stats().ready, q.stats().dead) == (1, 0)
+            await sleep(TWO)
+            assert q.stats().dead == 1
 
         run_async(main)
 
