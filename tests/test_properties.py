@@ -35,8 +35,8 @@ from pymq.broker.workqueue import WorkQueue
 from pymq.errors import PersistenceError
 from pymq.message import Message
 from pymq.persistence import load_queues, save_queues
-from pymq.queue import BaseMessageQueue, MessageQueue, PriorityMessageQueue
-from tests.strategies import message_bodies, priorities, retry_limits
+from pymq.queue import BaseMessageQueue, PriorityMessageQueue
+from tests.strategies import by_priority, message_bodies, priorities, queue_kinds, retry_limits
 
 # why: the project stops any test after 10 seconds, which suits one example.
 # The thorough profile runs 2,000 examples per test and needs minutes, so
@@ -44,8 +44,8 @@ from tests.strategies import message_bodies, priorities, retry_limits
 pytestmark = pytest.mark.timeout(600)
 
 # --- Strategies: recipes for random inputs -----------------------------------
-# message_bodies(), priorities() and retry_limits() live in tests/strategies.py,
-# shared with the model check.
+# queue_kinds(), message_bodies(), priorities() and retry_limits() live in
+# tests/strategies.py, shared with the model check.
 
 # A JSON value is built from at most this many plain pieces. Hypothesis allows
 # 100 by default, which makes each input slow to invent; small values find the
@@ -61,11 +61,6 @@ PREFETCH = 2
 PUT, GET, ACK, REJECT = "put", "get", "ack", "reject"
 
 
-def queue_kinds() -> st.SearchStrategy[type[BaseMessageQueue]]:
-    """Pick a kind of queue: first-come-first-served, or most urgent first."""
-    return st.sampled_from([MessageQueue, PriorityMessageQueue])
-
-
 def queue_names() -> st.SearchStrategy[str]:
     """Make any queue name at all."""
     return st.text()
@@ -73,6 +68,7 @@ def queue_names() -> st.SearchStrategy[str]:
 
 def queue_steps() -> st.SearchStrategy[tuple[str, str, int]]:
     """Make one thing that happens at a queue: put a message, take one, ack it or reject it."""
+    # PUT is listed twice, so puts happen twice as often and the queue fills up.
     return st.tuples(st.sampled_from([PUT, PUT, GET, ACK, REJECT]), message_bodies(), priorities())
 
 
@@ -137,6 +133,7 @@ def damaged_save_files(draw: st.DrawFn) -> dict[str, object]:
 
 def work_queue_steps() -> st.SearchStrategy[tuple[str, int]]:
     """Make one thing that happens at the work queue, with a number to pick who or what."""
+    # "put" is listed twice, so puts happen twice as often and clerks stay busy.
     actions = ["put", "put", "ack", "nack", "drop", "wait", "swap clerk", "replay"]
     return st.tuples(st.sampled_from(actions), st.integers(0, 10))
 
@@ -164,8 +161,10 @@ def queue_after(
         if action == PUT:
             queue.put(body, priority)
             continue
-        if (action == GET or not held) and (msg := queue.get()) is not None:
-            held.append(msg)
+        if action == GET or not held:
+            msg = queue.get()
+            if msg is not None:
+                held.append(msg)
         if action == ACK and held:
             queue.acknowledge(held.pop(0))
         elif action == REJECT and held:
@@ -194,11 +193,6 @@ def drain(queue: BaseMessageQueue) -> list[dict[str, object]]:
         queue.acknowledge(msg)
         taken.append(asdict(msg))
     return taken
-
-
-def by_priority(message: dict[str, object]) -> int:
-    """Return a saved message's priority, to sort by."""
-    return cast("int", message["priority"])
 
 
 def load_or_refuse(path: Path) -> None:

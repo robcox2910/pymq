@@ -48,7 +48,7 @@ from hypothesis.stateful import (
 from pymq.message import Message
 from pymq.persistence import load_queues, save_queues
 from pymq.queue import BaseMessageQueue, MessageQueue, PriorityMessageQueue
-from tests.strategies import message_bodies, priorities
+from tests.strategies import by_priority, message_bodies, priorities, queue_kinds
 
 # why: the project stops any test after 10 seconds, which suits one example.
 # The thorough profile runs 2,000 examples per test and needs minutes, so
@@ -67,11 +67,6 @@ MOST_RETRIES = 3
 MOST_FIRST_CUSTOMERS = 3
 
 
-def queue_kinds() -> st.SearchStrategy[type[BaseMessageQueue]]:
-    """Pick a kind of queue: first-come-first-served, or most urgent first."""
-    return st.sampled_from([MessageQueue, PriorityMessageQueue])
-
-
 def small_retry_limits() -> st.SearchStrategy[int]:
     """Pick a retry limit from 0 to 3."""
     return st.integers(min_value=0, max_value=MOST_RETRIES)
@@ -85,11 +80,6 @@ def strangers() -> st.SearchStrategy[Message]:
 def first_customers() -> st.SearchStrategy[list[tuple[str, int]]]:
     """Make up to three messages already waiting when the queue opens."""
     return st.lists(st.tuples(message_bodies(), priorities()), max_size=MOST_FIRST_CUSTOMERS)
-
-
-def by_priority(message: Saved) -> int:
-    """Return a written-down message's priority, to sort by."""
-    return cast("int", message["priority"])
 
 
 class QueueMachine(RuleBasedStateMachine):
@@ -207,6 +197,16 @@ class QueueMachine(RuleBasedStateMachine):
             retries = cast("int", saved["retries"]) + 1
             again = {**saved, "retries": retries}
             (self.dead if retries > self.max_retries else self.line).append(again)
+
+    @rule(
+        msg=st.one_of(messages, taken),
+        body=message_bodies(),
+        priority=priorities(),
+        retries=st.integers(),
+    )
+    def scribble_on_a_message(self, msg: Message, body: str, priority: int, retries: int) -> None:
+        """Change a message we were handed: the queue's own copy, and the notebook, stay as they were."""
+        msg.body, msg.priority, msg.retries = body, priority, retries
 
     @rule()
     def get_dead_letter(self) -> None:

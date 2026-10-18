@@ -160,7 +160,11 @@ counter, they compare the post office with the notebook. If the two ever
 disagree, something's wrong with the post office.
 
 That notebook is a **model**: something simple that we already trust.
-Here's part of the check in `tests/test_model.py`:
+It checks the classic queues. (The broker's work queue has no model check:
+it only runs inside a live event loop, and Hypothesis plays a story one
+step at a time from ordinary code, so it gets the "every message in
+exactly one place" property instead.) Here's part of the check in
+`tests/test_model.py`:
 
 ```python
 class QueueMachine(RuleBasedStateMachine):
@@ -170,6 +174,7 @@ class QueueMachine(RuleBasedStateMachine):
         super().__init__()
         self.queue: BaseMessageQueue = MessageQueue("orders")
         self.kind: type[BaseMessageQueue] = MessageQueue
+        self.max_retries = 0
         self.line: list[Saved] = []  # waiting, in the order they arrived
         self.out: list[Saved] = []  # handed out, not yet acknowledged
         self.dead: list[Saved] = []  # the dead-letter shelf, oldest first
@@ -200,7 +205,6 @@ class QueueMachine(RuleBasedStateMachine):
             "waiting": self.out + self.in_delivery_order(),
             "dead_letters": self.dead,
         }
-
 QueueMachine.TestCase.settings = settings(stateful_step_count=20)
 TestQueueModel = cast("type[unittest.TestCase]", QueueMachine.TestCase)
 ```
@@ -220,7 +224,8 @@ Piece by piece:
 - **Each `@rule`** is one kind of step. It does the same thing to the
   queue and to the notebook. The real file has rules to put, take, take
   and hand straight back, acknowledge, reject, settle a made-up message,
-  take a dead letter, and close for the night (save and load).
+  scribble on a message we were handed (the queue must not notice), take a
+  dead letter, and close for the night (save and load).
 - **`messages = Bundle("messages")`** is a bag of messages from earlier
   in the story. `put` drops its message in the bag (`target=messages`),
   and a later rule pulls one out to acknowledge or reject it. (A second
@@ -242,11 +247,6 @@ The lists are a good model because they're obviously right and they're
 *not* PyMQ's code. If we built the model by copying the queue's heap and
 counter, any bug would be in both, and they'd agree perfectly about the
 wrong answer.
-
-The broker's work queue has no model check. It only runs inside a live
-event loop, and Hypothesis plays a story one step at a time from ordinary
-code, so it gets the "every message in exactly one place" property
-instead.
 
 ## Try It Yourself
 
@@ -342,8 +342,8 @@ dead-letter shelf. The queue put it back in line.
 Here's why. `reject` found the message by its id, then incremented and
 requeued the object *you* handed it. After a restart, the loaded queue
 holds a fresh copy, so the old copy, still saying "retry 0", went back in
-line. A message rejected that way could dodge the dead-letter shelf
-forever. The example tests always rejected the exact object `get` had
+line. Rejected that way after every restart, a message could dodge the
+dead-letter shelf forever. The example tests always rejected the exact object `get` had
 just returned, where the two copies are one and the same.
 
 The fix makes `reject` use the queue's own copy:
@@ -378,7 +378,12 @@ extra retry and goes back in line. The story is now an example test in
         assert q.dead_letter_count == 1
 ```
 
-The round-trip found a second bug: a queue made with `max_retries=-1`
+A reviewer then spotted a cousin of this bug that our tests had missed:
+`put` and `get` handed out the queue's own message, so setting
+`msg.retries = 0` before each reject also dodged the dead letters. Now
+they hand out copies, and the model has a rule that scribbles on them.
+
+The round-trip found another bug: a queue made with `max_retries=-1`
 saved fine, but `load_queues` refused the file it had just written. Now
 the queue refuses a negative limit when it's made. And by reading the
 loader, we found that a number over 4,300 digits or lists nested 100,000
@@ -398,7 +403,7 @@ The `--no-cov` turns off the coverage check, which expects the *whole*
 test suite to run and would fail on two files.
 
 Run them the long way (2,000 random examples each, different every run)
-to hunt for rarer bugs. It takes about 3 minutes:
+to hunt for rarer bugs. It takes about 3 and a half minutes:
 
 ```bash
 uv run pytest tests/test_properties.py tests/test_model.py --no-cov --hypothesis-profile=thorough
