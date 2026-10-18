@@ -282,6 +282,20 @@ class TestBadFiles:
             save_queues([queue], path)
         assert not path.exists()
 
+    def test_refused_save_leaves_the_old_file_untouched(self, tmp_path: Path) -> None:
+        """When a save over an existing file is refused, the old file stays byte for byte."""
+        path = tmp_path / "queues.json"
+        good = MessageQueue("q")
+        good.put("keep me")
+        save_queues([good], path)
+        before = path.read_bytes()
+        queue = PriorityMessageQueue("q")
+        queue.put("huge", priority=10**4300)
+        with pytest.raises(PersistenceError, match=re.escape(str(path))):
+            save_queues([queue], path)
+        assert path.read_bytes() == before
+        assert [p.name for p in tmp_path.iterdir()] == ["queues.json"]
+
     def test_saved_file_is_readable_json(self, tmp_path: Path) -> None:
         """The save file is plain JSON a learner can open and read."""
         path = tmp_path / "queues.json"
