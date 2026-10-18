@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from pymq.message import Message
 from pymq.persistence import load_queues, save_queues
 from pymq.queue import MessageQueue
 
@@ -305,3 +306,22 @@ class TestMessagesHandedOutAreCopies:
         dead = q.get_dead_letter()
         assert dead is not None
         assert dead is not msg
+
+    def test_editing_messages_given_to_from_messages_leaves_the_queue_alone(self) -> None:
+        """``from_messages`` keeps its own copies, so the caller's messages stay the caller's.
+
+        Found in review: it stored the caller's objects, so resetting
+        ``retries`` on one afterwards changed the queue's message too.
+        """
+        waiting = Message(id="w", body="real", timestamp="t", retries=1)
+        dead = Message(id="d", body="dead", timestamp="t", retries=4)
+        q = MessageQueue.from_messages("q", 3, [waiting], [dead])
+        waiting.body = "scribbled"
+        waiting.retries = 0
+        dead.body = "scribbled"
+        got = q.get()
+        assert got is not None
+        assert (got.body, got.retries) == ("real", 1)
+        dead_letter = q.get_dead_letter()
+        assert dead_letter is not None
+        assert dead_letter.body == "dead"

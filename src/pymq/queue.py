@@ -15,7 +15,8 @@ class BaseMessageQueue(ABC):
 
     Every message handed back (by ``put``, ``get`` and
     ``get_dead_letter``) is a copy, like a receipt: scribbling on it never
-    changes the message the queue holds. ``acknowledge`` and ``reject``
+    changes the message the queue holds. ``from_messages`` copies the
+    messages it is given, too. ``acknowledge`` and ``reject``
     find the queue's own message by its ``id``.
 
     Think of this as the blueprint for a bakery counter. Every counter
@@ -181,12 +182,14 @@ class BaseMessageQueue(ABC):
 
         Returns:
             A queue that hands the messages out in the same order as before.
+            It holds copies, so changing the messages passed in afterwards
+            never changes the queue.
 
         """
         queue = cls(name, max_retries)
         for msg in waiting:
-            queue._requeue(msg)
-        queue._dead_letters.extend(dead_letters)
+            queue._requeue(replace(msg))
+        queue._dead_letters.extend(replace(msg) for msg in dead_letters)
         return queue
 
     def get_dead_letter(self) -> Message | None:
