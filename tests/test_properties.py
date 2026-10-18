@@ -40,6 +40,7 @@ from tests.strategies import (
     PROPERTY_TIMEOUT,
     by_priority,
     message_bodies,
+    normal_run_seed,
     priorities,
     queue_kinds,
     retry_limits,
@@ -294,6 +295,13 @@ def test_any_json_on_disk_load_or_raise_persistence_error(document: JsonValue) -
         load_or_refuse(path)
 
 
+# why: the normal run's seed would otherwise come from this test's source, so
+# rewording it could stop the run finding the bug the property-testing page
+# breaks on purpose ("Try It Yourself"). Pinned; the thorough run stays random.
+DAMAGED_FILE_SEED = 1
+
+
+@normal_run_seed(DAMAGED_FILE_SEED)
 @given(document=damaged_save_files())
 def test_damaged_save_file_loads_or_raises_persistence_error(document: dict[str, object]) -> None:
     """A real save file with one field swapped or missing, or one item pasted twice, loads or gives a PersistenceError."""

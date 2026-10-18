@@ -7,10 +7,11 @@ and the ``by_priority`` sort key that goes with them, plus the time limit
 both files use.
 """
 
+from collections.abc import Callable
 from typing import cast
 
 import pytest
-from hypothesis import settings
+from hypothesis import seed, settings
 from hypothesis import strategies as st
 
 from pymq.queue import BaseMessageQueue, MessageQueue, PriorityMessageQueue
@@ -28,6 +29,17 @@ _is_thorough_run = settings.get_current_profile_name() == THOROUGH_PROFILE
 PROPERTY_TIMEOUT = pytest.mark.timeout(
     THOROUGH_RUN_TIMEOUT_SECONDS if _is_thorough_run else NORMAL_RUN_TIMEOUT_SECONDS
 )
+
+
+def normal_run_seed[T: Callable[..., object]](value: int) -> Callable[[T], T]:
+    """Pin a test's seed on a normal run, leaving the thorough run random.
+
+    On the ``ci`` profile Hypothesis otherwise takes the seed from the test's
+    own source, so rewording a docstring changes which inputs it tries.
+    """
+    if _is_thorough_run:
+        return lambda test: test
+    return seed(value)
 
 
 def queue_kinds() -> st.SearchStrategy[type[BaseMessageQueue]]:

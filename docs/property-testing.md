@@ -269,8 +269,8 @@ uv run pytest tests/test_properties.py tests/test_model.py --no-cov
 Hypothesis reports this (trimmed to the interesting part):
 
 ```
-    @given(document=damaged_save_files())
->   def test_damaged_save_file_loads_or_raises_persistence_error(document: dict[str, object]) -> None:
+    @normal_run_seed(DAMAGED_FILE_SEED)
+>   @given(document=damaged_save_files())
 
 >   if not all(isinstance(fields.get(key), str) for key in _TEXT_FIELDS) or not all(
         _is_int(fields.get(key)) for key in _NUMBER_FIELDS
