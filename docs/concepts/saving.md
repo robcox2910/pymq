@@ -48,7 +48,16 @@ halfway through, you still have the whole old file, never half of each.
 
 If a file is damaged, or isn't a save file at all, `load_queues` raises a
 `PersistenceError` that names the file. It never pretends the file was
-empty, because the next save would then write over your messages.
+empty, because the next save would then write over your messages. A file
+with two queues of one name, or two messages in one queue with one id, is
+refused too: the queue tells messages apart by their id, so one of the
+pair would be lost.
+
+`save_queues` refuses, with a `PersistenceError` and without writing
+anything, a file the loader would refuse: two queues with one name, or a
+priority over 4,300 digits long (Python won't write a number that long as
+text). A queue still takes any whole number as a priority; only saving
+such a giant one fails.
 
 ## What We Test
 

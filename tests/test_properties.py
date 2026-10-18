@@ -16,6 +16,7 @@ The step-by-step check of the queues against a plain list lives in
 ``tests/test_model.py``. See ``docs/property-testing.md`` for the walk-through.
 """
 
+import copy
 import json
 import tempfile
 from collections.abc import Callable
@@ -23,7 +24,6 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import cast
 
-import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 from pynet.loop import run, sleep
@@ -36,12 +36,18 @@ from pymq.errors import PersistenceError
 from pymq.message import Message
 from pymq.persistence import load_queues, save_queues
 from pymq.queue import BaseMessageQueue, PriorityMessageQueue
-from tests.strategies import by_priority, message_bodies, priorities, queue_kinds, retry_limits
+from tests.strategies import (
+    PROPERTY_TIMEOUT,
+    by_priority,
+    message_bodies,
+    normal_run_seed,
+    priorities,
+    queue_kinds,
+    retry_limits,
+)
 
-# why: the project stops any test after 10 seconds, which suits one example.
-# The thorough profile runs 2,000 examples per test and needs minutes, so
-# these tests get a longer limit; a hang still fails, just later.
-pytestmark = pytest.mark.timeout(600)
+# 10 seconds on a normal run, 10 minutes on the thorough one (see tests/strategies.py).
+pytestmark = PROPERTY_TIMEOUT
 
 # --- Strategies: recipes for random inputs -----------------------------------
 # queue_kinds(), message_bodies(), priorities() and retry_limits() live in
@@ -120,14 +126,20 @@ def envelopes() -> st.SearchStrategy[Envelope]:
 
 @st.composite
 def damaged_save_files(draw: st.DrawFn) -> dict[str, object]:
-    """Make a real save file with one field swapped for any JSON value, or taken out."""
+    """Make a real save file with one field swapped or taken out, or one list item copied."""
     queue = queue_after(draw(queue_kinds()), draw(queue_names()), 0, draw(queue_days()))
     document: dict[str, object] = {"queues": [queue.to_dict()]}
     fields, key = draw(st.sampled_from(fields_in(document)))
+    # Innermost lists first, so a copied message is tried as often as a copied queue.
+    lists = [items for items in reversed(lists_in(document)) if items]
     if draw(st.booleans()):
         fields[key] = draw(json_values())
-    else:
+    elif not lists or draw(st.booleans()):
         del fields[key]
+    else:
+        # A hand-edit that pastes a message (or a whole queue) in twice.
+        items = draw(st.sampled_from(lists))
+        items.insert(draw(st.integers(0, len(items))), copy.deepcopy(draw(st.sampled_from(items))))
     return document
 
 
@@ -186,6 +198,20 @@ def fields_in(document: object) -> list[tuple[dict[str, object], str]]:
     return found
 
 
+def lists_in(document: object) -> list[list[object]]:
+    """List every list in a JSON document, outermost first."""
+    found: list[list[object]] = []
+    if isinstance(document, dict):
+        for value in cast("dict[str, object]", document).values():
+            found.extend(lists_in(value))
+    elif isinstance(document, list):
+        items = cast("list[object]", document)
+        found.append(items)
+        for value in items:
+            found.extend(lists_in(value))
+    return found
+
+
 def drain(queue: BaseMessageQueue) -> list[dict[str, object]]:
     """Take every waiting message, acknowledging each, and return them in delivery order."""
     taken: list[dict[str, object]] = []
@@ -199,12 +225,21 @@ def load_or_refuse(path: Path) -> None:
     """Load the queues at ``path``, accepting only a PersistenceError refusal.
 
     A PersistenceError is caught and ignored: refusing a bad file is fine. Any
-    *other* exception escapes and fails the test, and that is the whole check.
+    *other* exception escapes and fails the test. A file that *does* load must
+    be one the queues can keep: take every message without acknowledging it,
+    save again, and every message is still in the new file.
     """
     try:
-        load_queues(path)
+        queues = load_queues(path)
     except PersistenceError:
         return
+    counts = {name: queue.size + queue.dead_letter_count for name, queue in queues.items()}
+    for queue in queues.values():
+        while queue.get() is not None:
+            pass
+    save_queues(queues.values(), path)
+    again = load_queues(path)
+    assert {name: q.size + q.dead_letter_count for name, q in again.items()} == counts
 
 
 # --- Save and load: whatever was waiting is waiting again ---------------------
@@ -260,9 +295,16 @@ def test_any_json_on_disk_load_or_raise_persistence_error(document: JsonValue) -
         load_or_refuse(path)
 
 
+# why: the normal run's seed would otherwise come from this test's source, so
+# rewording it could stop the run finding the bug the property-testing page
+# breaks on purpose ("Try It Yourself"). Pinned; the thorough run stays random.
+DAMAGED_FILE_SEED = 1
+
+
+@normal_run_seed(DAMAGED_FILE_SEED)
 @given(document=damaged_save_files())
 def test_damaged_save_file_loads_or_raises_persistence_error(document: dict[str, object]) -> None:
-    """A real save file with one field swapped or missing loads, or gives a PersistenceError."""
+    """A real save file with one field swapped or missing, or one item pasted twice, loads or gives a PersistenceError."""
     with tempfile.TemporaryDirectory() as folder:
         path = Path(folder) / "queues.json"
         path.write_text(json.dumps(document), encoding="utf-8")

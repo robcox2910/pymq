@@ -132,7 +132,7 @@ PyMQ has five more properties:
 |---|---|
 | Whatever bytes are in the file, loading gives queues or a `PersistenceError`, never another error | `test_any_bytes_on_disk_load_or_raise_persistence_error` |
 | Whatever JSON is in the file, loading gives queues or a `PersistenceError`, never another error | `test_any_json_on_disk_load_or_raise_persistence_error` |
-| A real save file with one field swapped or missing loads, or gives a `PersistenceError` | `test_damaged_save_file_loads_or_raises_persistence_error` |
+| A real save file with one field swapped or missing, or one message or queue pasted in twice, gives a `PersistenceError` or loads; if it loads, taking every message and saving again loses none | `test_damaged_save_file_loads_or_raises_persistence_error` |
 | Encoding an envelope, sending it as JSON text and decoding it gives back the same envelope | `test_envelope_survives_the_wire` |
 | Whatever happens in a day at the broker's work queue, at closing time every message is in exactly one place | `test_work_queue_never_loses_or_duplicates_a_message` |
 
@@ -269,8 +269,8 @@ uv run pytest tests/test_properties.py tests/test_model.py --no-cov
 Hypothesis reports this (trimmed to the interesting part):
 
 ```
-    @given(document=damaged_save_files())
->   def test_damaged_save_file_loads_or_raises_persistence_error(document: dict[str, object]) -> None:
+    @normal_run_seed(DAMAGED_FILE_SEED)
+>   @given(document=damaged_save_files())
 
 >   if not all(isinstance(fields.get(key), str) for key in _TEXT_FIELDS) or not all(
         _is_int(fields.get(key)) for key in _NUMBER_FIELDS
@@ -389,6 +389,15 @@ the queue refuses a negative limit when it's made. And by reading the
 loader, we found that a number over 4,300 digits or lists nested 100,000
 deep crashed it with the wrong error; random inputs never get that big,
 so those two are pinned as example tests.
+
+Later, a reviewer pasted one message into a save file twice, the way a
+hand-edit might. `load_queues` took it, but the queue keeps a taken
+message by its `id`, so taking both copies and saving again quietly lost
+one. Now the loader refuses two messages with one `id` in a queue. The
+damaged-file property used to check only *which error* came out, so it
+could never see a lost message. Now it also pastes a message (or a queue)
+in twice, and when a file loads it takes every message, saves again, and
+counts them.
 
 ## Run It Yourself
 

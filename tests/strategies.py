@@ -3,14 +3,43 @@
 A strategy tells Hypothesis how to invent one kind of input. Each one here
 is a named function, named for what it makes, with a one-line docstring.
 ``tests/test_properties.py`` and ``tests/test_model.py`` both use them,
-and the ``by_priority`` sort key that goes with them.
+and the ``by_priority`` sort key that goes with them, plus the time limit
+both files use.
 """
 
+from collections.abc import Callable
 from typing import cast
 
+import pytest
+from hypothesis import seed, settings
 from hypothesis import strategies as st
 
 from pymq.queue import BaseMessageQueue, MessageQueue, PriorityMessageQueue
+
+# --- Time limits ----------------------------------------------------------------
+# pytest stops any test after 10 seconds (see addopts in pyproject.toml), so a
+# hang fails fast. A normal run of 100 examples must finish well inside that.
+# The thorough run (the profile in conftest.py) tries 2,000, so the property
+# tests and the model check get 10 minutes instead. Each test module sets
+# ``pytestmark = PROPERTY_TIMEOUT``.
+THOROUGH_PROFILE = "thorough"
+NORMAL_RUN_TIMEOUT_SECONDS = 10
+THOROUGH_RUN_TIMEOUT_SECONDS = 600
+_is_thorough_run = settings.get_current_profile_name() == THOROUGH_PROFILE
+PROPERTY_TIMEOUT = pytest.mark.timeout(
+    THOROUGH_RUN_TIMEOUT_SECONDS if _is_thorough_run else NORMAL_RUN_TIMEOUT_SECONDS
+)
+
+
+def normal_run_seed[T: Callable[..., object]](value: int) -> Callable[[T], T]:
+    """Pin a test's seed on a normal run, leaving the thorough run random.
+
+    On the ``ci`` profile Hypothesis otherwise takes the seed from the test's
+    own source, so rewording a docstring changes which inputs it tries.
+    """
+    if _is_thorough_run:
+        return lambda test: test
+    return seed(value)
 
 
 def queue_kinds() -> st.SearchStrategy[type[BaseMessageQueue]]:
