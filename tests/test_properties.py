@@ -128,19 +128,17 @@ def damaged_save_files(draw: st.DrawFn) -> dict[str, object]:
     """Make a real save file with one field swapped or taken out, or one list item copied."""
     queue = queue_after(draw(queue_kinds()), draw(queue_names()), 0, draw(queue_days()))
     document: dict[str, object] = {"queues": [queue.to_dict()]}
-    # Innermost first, so a copied message is tried as often as a copied queue.
+    fields, key = draw(st.sampled_from(fields_in(document)))
+    # Innermost lists first, so a copied message is tried as often as a copied queue.
     lists = [items for items in reversed(lists_in(document)) if items]
-    damage = draw(st.sampled_from(["copy", "swap", "remove"] if lists else ["swap", "remove"]))
-    if damage == "copy":
+    if draw(st.booleans()):
+        fields[key] = draw(json_values())
+    elif not lists or draw(st.booleans()):
+        del fields[key]
+    else:
         # A hand-edit that pastes a message (or a whole queue) in twice.
         items = draw(st.sampled_from(lists))
         items.insert(draw(st.integers(0, len(items))), copy.deepcopy(draw(st.sampled_from(items))))
-        return document
-    fields, key = draw(st.sampled_from(fields_in(document)))
-    if damage == "swap":
-        fields[key] = draw(json_values())
-    else:
-        del fields[key]
     return document
 
 
@@ -298,7 +296,7 @@ def test_any_json_on_disk_load_or_raise_persistence_error(document: JsonValue) -
 
 @given(document=damaged_save_files())
 def test_damaged_save_file_loads_or_raises_persistence_error(document: dict[str, object]) -> None:
-    """A real save file with one field swapped or missing, or one list item copied, loads or gives a PersistenceError."""
+    """A real save file with one field swapped or missing, or one item pasted twice, loads or gives a PersistenceError."""
     with tempfile.TemporaryDirectory() as folder:
         path = Path(folder) / "queues.json"
         path.write_text(json.dumps(document), encoding="utf-8")
