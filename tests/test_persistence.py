@@ -2,6 +2,7 @@
 
 import json
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -58,7 +59,7 @@ class TestRoundTrip:
         assert msg is not None
         q.reject(msg)
         loaded = _round_trip(tmp_path, q)["orders"].get()
-        assert loaded == msg
+        assert loaded == replace(msg, retries=1)
 
     def test_settings_survive(self, tmp_path: Path) -> None:
         """The retry limit is kept, so dead-lettering works the same after a restart."""
@@ -179,6 +180,22 @@ class TestBadFiles:
         """Bytes that aren't UTF-8 text raise PersistenceError naming the file."""
         path = tmp_path / "queues.json"
         path.write_bytes(b"\xff\xfe{")
+        with pytest.raises(PersistenceError, match=re.escape(str(path))):
+            load_queues(path)
+
+    @pytest.mark.parametrize(
+        "content",
+        ["9" * 4301, "[" * 100_000],
+        ids=["number-too-long", "nested-too-deep"],
+    )
+    def test_json_too_big_to_read_is_refused(self, tmp_path: Path, content: str) -> None:
+        """A number over 4,300 digits, or lists nested 100,000 deep, raise PersistenceError.
+
+        Python's JSON reader gives up on these with a plain ValueError and a
+        RecursionError, which aren't the JSONDecodeError the loader expected.
+        """
+        path = tmp_path / "queues.json"
+        path.write_text(content, encoding="utf-8")
         with pytest.raises(PersistenceError, match=re.escape(str(path))):
             load_queues(path)
 

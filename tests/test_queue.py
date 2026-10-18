@@ -1,5 +1,11 @@
 """Test the MessageQueue class for FIFO ordering, ack, reject, and DLQ."""
 
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+
+from pymq.persistence import load_queues, save_queues
 from pymq.queue import MessageQueue
 
 MAX_RETRIES_DEFAULT = 3
@@ -104,7 +110,9 @@ class TestMessageQueueReject:
         assert msg is not None
         assert msg.retries == 0
         q.reject(msg)
-        assert msg.retries == 1
+        again = q.get()
+        assert again is not None
+        assert again.retries == 1
 
     def test_max_retries_moves_to_dlq(self) -> None:
         """Exceeding max retries should move the message to the dead-letter queue."""
@@ -189,3 +197,111 @@ class TestMessageQueueReject:
         msg_b = q.get()
         assert msg_b is not None
         assert msg_b.body == "b"
+
+
+class TestRetryLimit:
+    """The retry limit is a whole number, 0 or more."""
+
+    def test_negative_retry_limit_is_refused(self) -> None:
+        """A limit below zero is refused up front: a save file holding it could never be loaded.
+
+        Found by the save-and-load property, which shrank its failure to this:
+        an empty queue called "" with ``max_retries=-1`` saved fine, then
+        ``load_queues`` refused the file it had just written.
+        """
+        with pytest.raises(ValueError, match="max_retries"):
+            MessageQueue("", max_retries=-1)
+
+    def test_true_is_not_a_retry_limit(self) -> None:
+        """``True`` is refused too: it would be saved as ``true``, which isn't a number in JSON."""
+        with pytest.raises(ValueError, match="max_retries"):
+            MessageQueue("q", max_retries=True)
+
+    def test_fraction_is_not_a_retry_limit(self) -> None:
+        """``1.5`` is refused: the save file would hold a number the loader won't take back."""
+        with pytest.raises(ValueError, match="max_retries"):
+            MessageQueue("q", max_retries=1.5)  # pyright: ignore[reportArgumentType]
+
+    def test_zero_is_a_retry_limit(self) -> None:
+        """A limit of 0 is fine: the first rejection dead-letters the message."""
+        assert MessageQueue("q", max_retries=0).to_dict()["max_retries"] == 0
+
+
+class TestRejectUsesTheQueuesOwnCopy:
+    """Reject goes by the message's id; the queue keeps its own copy, not the caller's."""
+
+    def test_reject_with_a_handle_from_before_a_restart(self, tmp_path: Path) -> None:
+        """Rejecting with a copy from before a restart still counts against the queue's message.
+
+        Found by the model check, which shrank its failure to this story. The
+        queue used to put the *caller's* old copy back in line, with its old
+        retry count, so the message dodged the dead-letter queue.
+        """
+        path = tmp_path / "queues.json"
+        q = MessageQueue("orders", max_retries=1)
+        old = q.put("")
+        save_queues([q], path)
+        q = load_queues(path)["orders"]
+        msg = q.get()
+        assert msg is not None
+        q.reject(msg)
+        assert q.get() is not None
+        q.reject(old)
+        assert q.size == 0
+        assert q.dead_letter_count == 1
+
+    def test_reject_never_takes_the_callers_body(self) -> None:
+        """Rejecting with an edited copy puts the queue's own message back, unchanged."""
+        q = MessageQueue("orders")
+        q.put("real")
+        msg = q.get()
+        assert msg is not None
+        q.reject(replace(msg, body="forged"))
+        again = q.get()
+        assert again is not None
+        assert (again.body, again.retries) == ("real", 1)
+
+
+class TestMessagesHandedOutAreCopies:
+    """Editing a message you were handed never changes the one in the queue."""
+
+    def test_resetting_retries_cannot_dodge_the_dead_letters(self) -> None:
+        """Setting ``retries = 0`` on a taken message before rejecting it changes nothing.
+
+        Found in review: with the queue's own message handed out, this loop
+        kept a message out of the dead-letter queue forever.
+        """
+        q = MessageQueue("q", max_retries=1)
+        q.put("fragile")
+        for _ in range(2):
+            msg = q.get()
+            assert msg is not None
+            msg.retries = 0
+            q.reject(msg)
+        assert q.size == 0
+        assert q.dead_letter_count == 1
+
+    def test_editing_a_put_message_leaves_the_queued_one_alone(self) -> None:
+        """Changing the body of the message ``put`` returned doesn't change what ``get`` hands out."""
+        q = MessageQueue("q")
+        sent = q.put("real")
+        sent.body = "scribbled"
+        got = q.get()
+        assert got is not None
+        assert got.body == "real"
+        got.body = "scribbled again"
+        q.reject(got)
+        again = q.get()
+        assert again is not None
+        assert again.body == "real"
+
+    def test_editing_a_dead_letter_leaves_the_queue_alone(self) -> None:
+        """``get_dead_letter`` hands back a copy too."""
+        q = MessageQueue("q", max_retries=0)
+        q.put("doomed")
+        msg = q.get()
+        assert msg is not None
+        q.reject(msg)
+        dead = q.get_dead_letter()
+        assert dead is not None
+        assert dead is not msg

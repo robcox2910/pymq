@@ -4,7 +4,7 @@ import heapq
 from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import Iterable
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import ClassVar, Self
 
 from pymq.message import Message, create_message
@@ -12,6 +12,11 @@ from pymq.message import Message, create_message
 
 class BaseMessageQueue(ABC):
     """Shared foundation for all message queues.
+
+    Every message handed back (by ``put``, ``get`` and
+    ``get_dead_letter``) is a copy, like a receipt: scribbling on it never
+    changes the message the queue holds. ``acknowledge`` and ``reject``
+    find the queue's own message by its ``id``.
 
     Think of this as the blueprint for a bakery counter. Every counter
     needs a name sign, a way to hand out tickets (messages), and a
@@ -21,7 +26,13 @@ class BaseMessageQueue(ABC):
 
     Args:
         name: Human-readable queue name.
-        max_retries: Maximum requeue attempts before dead-lettering.
+        max_retries: Maximum requeue attempts before dead-lettering
+            (a whole number, 0 or more).
+
+    Raises:
+        ValueError: If ``max_retries`` isn't a whole number of 0 or more
+            (``1.5``, ``True`` and ``-1`` are all refused).
+            A save file holding it could never be loaded back.
 
     """
 
@@ -32,6 +43,13 @@ class BaseMessageQueue(ABC):
 
     def __init__(self, name: str, max_retries: int = 3) -> None:
         """Create a new message queue."""
+        if (
+            isinstance(max_retries, bool)
+            or not isinstance(max_retries, int)  # pyright: ignore[reportUnnecessaryIsInstance]
+            or max_retries < 0
+        ):
+            msg = f"max_retries must be a whole number, 0 or more, got {max_retries!r}"
+            raise ValueError(msg)
         self._name = name
         self._max_retries = max_retries
         self._in_flight: dict[str, Message] = {}
@@ -61,7 +79,7 @@ class BaseMessageQueue(ABC):
             priority: Priority level (lower number = higher priority).
 
         Returns:
-            The newly created message.
+            A copy of the newly created message.
 
         """
 
@@ -70,7 +88,7 @@ class BaseMessageQueue(ABC):
         """Dequeue the next message and mark it as in-flight.
 
         Returns:
-            The next message, or None if the queue is empty.
+            A copy of the next message, or None if the queue is empty.
 
         """
 
@@ -98,7 +116,9 @@ class BaseMessageQueue(ABC):
     def reject(self, msg: Message) -> None:
         """Reject an in-flight message, requeuing or dead-lettering it.
 
-        Only messages that are currently in-flight can be rejected.
+        Only messages that are currently in-flight can be rejected, and
+        ``msg`` is matched by its id: the queue's own copy is the one that
+        goes back, so a copy from before a restart can't reset its retries.
         Increment the retry counter. If retries exceed ``max_retries``,
         move the message to the dead-letter queue; otherwise requeue it.
         Rejecting a message that was already acknowledged (or never
@@ -108,13 +128,14 @@ class BaseMessageQueue(ABC):
             msg: The message to reject.
 
         """
-        if self._in_flight.pop(msg.id, None) is None:
+        own = self._in_flight.pop(msg.id, None)
+        if own is None:
             return
-        msg.retries += 1
-        if msg.retries > self._max_retries:
-            self._dead_letters.append(msg)
+        own.retries += 1
+        if own.retries > self._max_retries:
+            self._dead_letters.append(own)
         else:
-            self._requeue(msg)
+            self._requeue(own)
 
     @abstractmethod
     def _waiting(self) -> list[Message]:
@@ -172,12 +193,12 @@ class BaseMessageQueue(ABC):
         """Dequeue the next message from the dead-letter queue.
 
         Returns:
-            The next dead-lettered message, or None if empty.
+            A copy of the next dead-lettered message, or None if empty.
 
         """
         if not self._dead_letters:
             return None
-        return self._dead_letters.popleft()
+        return replace(self._dead_letters.popleft())
 
 
 class MessageQueue(BaseMessageQueue):
@@ -216,25 +237,25 @@ class MessageQueue(BaseMessageQueue):
             priority: Ignored in FIFO queue, kept for API compatibility.
 
         Returns:
-            The newly created message.
+            A copy of the newly created message.
 
         """
         msg = create_message(body, priority=priority)
         self._messages.append(msg)
-        return msg
+        return replace(msg)
 
     def get(self) -> Message | None:
         """Dequeue the next message and mark it as in-flight.
 
         Returns:
-            The next message, or None if the queue is empty.
+            A copy of the next message, or None if the queue is empty.
 
         """
         if not self._messages:
             return None
         msg = self._messages.popleft()
         self._in_flight[msg.id] = msg
-        return msg
+        return replace(msg)
 
     def _waiting(self) -> list[Message]:
         """Return the waiting messages, front of the line first."""
@@ -286,26 +307,26 @@ class PriorityMessageQueue(BaseMessageQueue):
             priority: Priority level (lower number = higher priority).
 
         Returns:
-            The newly created message.
+            A copy of the newly created message.
 
         """
         msg = create_message(body, priority=priority)
         heapq.heappush(self._messages, (priority, self._counter, msg))
         self._counter += 1
-        return msg
+        return replace(msg)
 
     def get(self) -> Message | None:
         """Dequeue the highest-priority message and mark it as in-flight.
 
         Returns:
-            The highest-priority message, or None if the queue is empty.
+            A copy of the highest-priority message, or None if the queue is empty.
 
         """
         if not self._messages:
             return None
         _, _, msg = heapq.heappop(self._messages)
         self._in_flight[msg.id] = msg
-        return msg
+        return replace(msg)
 
     def _waiting(self) -> list[Message]:
         """Return the waiting messages, most urgent first, ties in arrival order."""

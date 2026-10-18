@@ -37,12 +37,18 @@ msg = q.get()     # "Process order #42" (first in, first out)
 q.acknowledge(msg)  # "Got it, delete it"
 ```
 
+The message `get` hands you is a copy, like a receipt. Scribbling on it
+(changing its body, priority or retry count) never changes the message
+the queue is keeping; `acknowledge` and `reject` find the real one by its
+`id`.
+
 ## What We Test
 
 - Messages come out in the order they went in (FIFO).
 - Getting from an empty queue returns None.
 - Acknowledged messages are removed permanently.
 - Unacknowledged messages can be requeued.
+- Editing a message you were handed never changes the queue.
 
 ## Next Up
 
