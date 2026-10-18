@@ -106,7 +106,9 @@ class BaseMessageQueue(ABC):
     def reject(self, msg: Message) -> None:
         """Reject an in-flight message, requeuing or dead-lettering it.
 
-        Only messages that are currently in-flight can be rejected.
+        Only messages that are currently in-flight can be rejected, and
+        ``msg`` is matched by its id: the queue's own copy is the one that
+        goes back, so a copy from before a restart can't reset its retries.
         Increment the retry counter. If retries exceed ``max_retries``,
         move the message to the dead-letter queue; otherwise requeue it.
         Rejecting a message that was already acknowledged (or never
@@ -116,13 +118,14 @@ class BaseMessageQueue(ABC):
             msg: The message to reject.
 
         """
-        if self._in_flight.pop(msg.id, None) is None:
+        own = self._in_flight.pop(msg.id, None)
+        if own is None:
             return
-        msg.retries += 1
-        if msg.retries > self._max_retries:
-            self._dead_letters.append(msg)
+        own.retries += 1
+        if own.retries > self._max_retries:
+            self._dead_letters.append(own)
         else:
-            self._requeue(msg)
+            self._requeue(own)
 
     @abstractmethod
     def _waiting(self) -> list[Message]:

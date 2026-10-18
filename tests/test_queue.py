@@ -1,7 +1,11 @@
 """Test the MessageQueue class for FIFO ordering, ack, reject, and DLQ."""
 
+from dataclasses import replace
+from pathlib import Path
+
 import pytest
 
+from pymq.persistence import load_queues, save_queues
 from pymq.queue import MessageQueue
 
 MAX_RETRIES_DEFAULT = 3
@@ -214,3 +218,38 @@ class TestRetryLimit:
     def test_zero_is_a_retry_limit(self) -> None:
         """A limit of 0 is fine: the first rejection dead-letters the message."""
         assert MessageQueue("q", max_retries=0).to_dict()["max_retries"] == 0
+
+
+class TestRejectUsesTheQueuesOwnCopy:
+    """Reject goes by the message's id; the queue keeps its own copy, not the caller's."""
+
+    def test_reject_with_a_handle_from_before_a_restart(self, tmp_path: Path) -> None:
+        """Rejecting with a copy from before a restart still counts against the queue's message.
+
+        Found by the model check, which shrank its failure to this story. The
+        queue used to put the *caller's* old copy back in line, with its old
+        retry count, so the message dodged the dead-letter queue.
+        """
+        path = tmp_path / "queues.json"
+        q = MessageQueue("orders", max_retries=1)
+        old = q.put("")
+        save_queues([q], path)
+        q = load_queues(path)["orders"]
+        msg = q.get()
+        assert msg is not None
+        q.reject(msg)
+        assert q.get() is not None
+        q.reject(old)
+        assert q.size == 0
+        assert q.dead_letter_count == 1
+
+    def test_reject_never_takes_the_callers_body(self) -> None:
+        """Rejecting with an edited copy puts the queue's own message back, unchanged."""
+        q = MessageQueue("orders")
+        q.put("real")
+        msg = q.get()
+        assert msg is not None
+        q.reject(replace(msg, body="forged"))
+        again = q.get()
+        assert again is not None
+        assert (again.body, again.retries) == ("real", 1)
