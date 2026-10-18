@@ -24,7 +24,6 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import cast
 
-import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 from pynet.loop import run, sleep
@@ -37,12 +36,17 @@ from pymq.errors import PersistenceError
 from pymq.message import Message
 from pymq.persistence import load_queues, save_queues
 from pymq.queue import BaseMessageQueue, PriorityMessageQueue
-from tests.strategies import by_priority, message_bodies, priorities, queue_kinds, retry_limits
+from tests.strategies import (
+    PROPERTY_TIMEOUT,
+    by_priority,
+    message_bodies,
+    priorities,
+    queue_kinds,
+    retry_limits,
+)
 
-# why: the project stops any test after 10 seconds, which suits one example.
-# The thorough profile runs 2,000 examples per test and needs minutes, so
-# these tests get a longer limit; a hang still fails, just later.
-pytestmark = pytest.mark.timeout(600)
+# 10 seconds on a normal run, 10 minutes on the thorough one (see tests/strategies.py).
+pytestmark = PROPERTY_TIMEOUT
 
 # --- Strategies: recipes for random inputs -----------------------------------
 # queue_kinds(), message_bodies(), priorities() and retry_limits() live in
