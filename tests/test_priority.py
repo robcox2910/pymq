@@ -135,8 +135,9 @@ class TestPriorityQueueBasics:
         q = PriorityMessageQueue("test")
         assert q.get_dead_letter() is None
 
-    @pytest.mark.parametrize("limit", [-1, True])
+    @pytest.mark.parametrize("limit", [-1, True, 1.5])
     def test_bad_retry_limit_is_refused(self, limit: int) -> None:
         """A retry limit below zero, or ``True``, is refused: it could never be loaded back."""
         with pytest.raises(ValueError, match="max_retries"):
             PriorityMessageQueue("q", max_retries=limit)
+

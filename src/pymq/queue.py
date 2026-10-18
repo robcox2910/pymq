@@ -25,7 +25,8 @@ class BaseMessageQueue(ABC):
             (a whole number, 0 or more).
 
     Raises:
-        ValueError: If ``max_retries`` is below 0 or is ``True``/``False``.
+        ValueError: If ``max_retries`` isn't a whole number of 0 or more
+            (``1.5``, ``True`` and ``-1`` are all refused).
             A save file holding it could never be loaded back.
 
     """
@@ -37,7 +38,11 @@ class BaseMessageQueue(ABC):
 
     def __init__(self, name: str, max_retries: int = 3) -> None:
         """Create a new message queue."""
-        if isinstance(max_retries, bool) or max_retries < 0:
+        if (
+            isinstance(max_retries, bool)
+            or not isinstance(max_retries, int)  # pyright: ignore[reportUnnecessaryIsInstance]
+            or max_retries < 0
+        ):
             msg = f"max_retries must be a whole number, 0 or more, got {max_retries!r}"
             raise ValueError(msg)
         self._name = name

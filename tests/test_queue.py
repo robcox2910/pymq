@@ -110,7 +110,9 @@ class TestMessageQueueReject:
         assert msg is not None
         assert msg.retries == 0
         q.reject(msg)
-        assert msg.retries == 1
+        again = q.get()
+        assert again is not None
+        assert again.retries == 1
 
     def test_max_retries_moves_to_dlq(self) -> None:
         """Exceeding max retries should move the message to the dead-letter queue."""
@@ -215,6 +217,11 @@ class TestRetryLimit:
         with pytest.raises(ValueError, match="max_retries"):
             MessageQueue("q", max_retries=True)
 
+    def test_fraction_is_not_a_retry_limit(self) -> None:
+        """``1.5`` is refused: the save file would hold a number the loader won't take back."""
+        with pytest.raises(ValueError, match="max_retries"):
+            MessageQueue("q", max_retries=1.5)  # pyright: ignore[reportArgumentType]
+
     def test_zero_is_a_retry_limit(self) -> None:
         """A limit of 0 is fine: the first rejection dead-letters the message."""
         assert MessageQueue("q", max_retries=0).to_dict()["max_retries"] == 0
@@ -253,3 +260,4 @@ class TestRejectUsesTheQueuesOwnCopy:
         again = q.get()
         assert again is not None
         assert (again.body, again.retries) == ("real", 1)
+
