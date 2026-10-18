@@ -53,6 +53,12 @@ with two queues of one name, or two messages in one queue with one id, is
 refused too: the queue tells messages apart by their id, so one of the
 pair would be lost.
 
+`save_queues` refuses, with a `PersistenceError` and without writing
+anything, a file the loader would refuse: two queues with one name, or a
+priority over 4,300 digits long (Python won't write a number that long as
+text). A queue still takes any whole number as a priority; only saving
+such a giant one fails.
+
 ## What We Test
 
 - FIFO and priority queues come back in the same order.

@@ -269,6 +269,19 @@ class TestBadFiles:
         with pytest.raises(PersistenceError, match=re.escape(str(path))):
             load_queues(path)
 
+    def test_priority_too_long_to_save_is_refused(self, tmp_path: Path) -> None:
+        """A priority over 4,300 digits raises PersistenceError, not a raw ValueError.
+
+        Python won't write a number that long as text, and ``load_queues``
+        refuses one anyway, so the file could never be loaded back.
+        """
+        path = tmp_path / "queues.json"
+        queue = PriorityMessageQueue("q")
+        queue.put("huge", priority=10**4300)
+        with pytest.raises(PersistenceError, match=re.escape(str(path))):
+            save_queues([queue], path)
+        assert not path.exists()
+
     def test_saved_file_is_readable_json(self, tmp_path: Path) -> None:
         """The save file is plain JSON a learner can open and read."""
         path = tmp_path / "queues.json"

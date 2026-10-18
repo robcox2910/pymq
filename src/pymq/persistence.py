@@ -49,8 +49,10 @@ def save_queues(queues: Iterable[BaseMessageQueue], filepath: str | Path) -> Non
         filepath: Path to the JSON file to create or overwrite.
 
     Raises:
-        PersistenceError: If writing to disk fails, or two queues share a
-            name (the file could never be loaded back).
+        PersistenceError: If writing to disk fails, two queues share a
+            name, or a message's priority is a whole number over 4,300
+            digits long (the file could never be loaded back). Nothing is
+            written then.
 
     """
     path = Path(filepath)
@@ -59,10 +61,16 @@ def save_queues(queues: Iterable[BaseMessageQueue], filepath: str | Path) -> Non
     if duplicates := sorted({str(name) for name in names if names.count(name) > 1}):
         msg = f"Cannot save queues to {path}: more than one queue is called {duplicates[0]!r}"
         raise PersistenceError(msg)
-    data = {"queues": entries}
+    try:
+        text = json.dumps({"queues": entries}, indent=2)
+    except ValueError as exc:
+        # Python won't write a whole number over 4,300 digits as text, and
+        # load_queues refuses one anyway, so the file could never come back.
+        msg = f"Cannot save queues to {path}: {exc}"
+        raise PersistenceError(msg) from exc
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(path, json.dumps(data, indent=2))
+        atomic_write_text(path, text)
     except OSError as exc:
         msg = f"Failed to save queues to {path}: {exc}"
         raise PersistenceError(msg) from exc
