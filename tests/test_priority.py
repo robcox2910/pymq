@@ -1,7 +1,10 @@
 """Test the PriorityMessageQueue for priority-based ordering."""
 
+from pathlib import Path
+
 import pytest
 
+from pymq.persistence import load_queues, save_queues
 from pymq.queue import PriorityMessageQueue
 
 HIGH_PRIORITY = 1
@@ -141,3 +144,22 @@ class TestPriorityQueueBasics:
         with pytest.raises(ValueError, match="max_retries"):
             PriorityMessageQueue("q", max_retries=limit)
 
+    def test_editing_a_priority_changes_nothing_before_or_after_saving(
+        self, tmp_path: Path
+    ) -> None:
+        """Setting ``priority`` on a returned message changes neither the queue nor its save file.
+
+        Found in review: the heap kept the old priority but the save file
+        wrote the new one, so the order changed after a restart.
+        """
+        q = PriorityMessageQueue("er")
+        slow = q.put("slow", priority=5)
+        q.put("urgent", priority=1)
+        slow.priority = 0
+        save_queues([q], tmp_path / "queues.json")
+        loaded = load_queues(tmp_path / "queues.json")["er"]
+        for queue in (q, loaded):
+            first, second = queue.get(), queue.get()
+            assert first is not None
+            assert second is not None
+            assert (first.body, second.body, second.priority) == ("urgent", "slow", 5)

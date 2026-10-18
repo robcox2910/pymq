@@ -2,6 +2,7 @@
 
 import json
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -58,7 +59,7 @@ class TestRoundTrip:
         assert msg is not None
         q.reject(msg)
         loaded = _round_trip(tmp_path, q)["orders"].get()
-        assert loaded == msg
+        assert loaded == replace(msg, retries=1)
 
     def test_settings_survive(self, tmp_path: Path) -> None:
         """The retry limit is kept, so dead-lettering works the same after a restart."""

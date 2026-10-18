@@ -261,3 +261,47 @@ class TestRejectUsesTheQueuesOwnCopy:
         assert again is not None
         assert (again.body, again.retries) == ("real", 1)
 
+
+class TestMessagesHandedOutAreCopies:
+    """Editing a message you were handed never changes the one in the queue."""
+
+    def test_resetting_retries_cannot_dodge_the_dead_letters(self) -> None:
+        """Setting ``retries = 0`` on a taken message before rejecting it changes nothing.
+
+        Found in review: with the queue's own message handed out, this loop
+        kept a message out of the dead-letter queue forever.
+        """
+        q = MessageQueue("q", max_retries=1)
+        q.put("fragile")
+        for _ in range(2):
+            msg = q.get()
+            assert msg is not None
+            msg.retries = 0
+            q.reject(msg)
+        assert q.size == 0
+        assert q.dead_letter_count == 1
+
+    def test_editing_a_put_message_leaves_the_queued_one_alone(self) -> None:
+        """Changing the body of the message ``put`` returned doesn't change what ``get`` hands out."""
+        q = MessageQueue("q")
+        sent = q.put("real")
+        sent.body = "scribbled"
+        got = q.get()
+        assert got is not None
+        assert got.body == "real"
+        got.body = "scribbled again"
+        q.reject(got)
+        again = q.get()
+        assert again is not None
+        assert again.body == "real"
+
+    def test_editing_a_dead_letter_leaves_the_queue_alone(self) -> None:
+        """``get_dead_letter`` hands back a copy too."""
+        q = MessageQueue("q", max_retries=0)
+        q.put("doomed")
+        msg = q.get()
+        assert msg is not None
+        q.reject(msg)
+        dead = q.get_dead_letter()
+        assert dead is not None
+        assert dead is not msg

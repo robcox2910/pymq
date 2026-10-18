@@ -4,7 +4,7 @@ import heapq
 from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import Iterable
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import ClassVar, Self
 
 from pymq.message import Message, create_message
@@ -12,6 +12,11 @@ from pymq.message import Message, create_message
 
 class BaseMessageQueue(ABC):
     """Shared foundation for all message queues.
+
+    Every message handed back (by ``put``, ``get`` and
+    ``get_dead_letter``) is a copy, like a receipt: scribbling on it never
+    changes the message the queue holds. ``acknowledge`` and ``reject``
+    find the queue's own message by its ``id``.
 
     Think of this as the blueprint for a bakery counter. Every counter
     needs a name sign, a way to hand out tickets (messages), and a
@@ -74,7 +79,7 @@ class BaseMessageQueue(ABC):
             priority: Priority level (lower number = higher priority).
 
         Returns:
-            The newly created message.
+            A copy of the newly created message.
 
         """
 
@@ -83,7 +88,7 @@ class BaseMessageQueue(ABC):
         """Dequeue the next message and mark it as in-flight.
 
         Returns:
-            The next message, or None if the queue is empty.
+            A copy of the next message, or None if the queue is empty.
 
         """
 
@@ -188,12 +193,12 @@ class BaseMessageQueue(ABC):
         """Dequeue the next message from the dead-letter queue.
 
         Returns:
-            The next dead-lettered message, or None if empty.
+            A copy of the next dead-lettered message, or None if empty.
 
         """
         if not self._dead_letters:
             return None
-        return self._dead_letters.popleft()
+        return replace(self._dead_letters.popleft())
 
 
 class MessageQueue(BaseMessageQueue):
@@ -232,25 +237,25 @@ class MessageQueue(BaseMessageQueue):
             priority: Ignored in FIFO queue, kept for API compatibility.
 
         Returns:
-            The newly created message.
+            A copy of the newly created message.
 
         """
         msg = create_message(body, priority=priority)
         self._messages.append(msg)
-        return msg
+        return replace(msg)
 
     def get(self) -> Message | None:
         """Dequeue the next message and mark it as in-flight.
 
         Returns:
-            The next message, or None if the queue is empty.
+            A copy of the next message, or None if the queue is empty.
 
         """
         if not self._messages:
             return None
         msg = self._messages.popleft()
         self._in_flight[msg.id] = msg
-        return msg
+        return replace(msg)
 
     def _waiting(self) -> list[Message]:
         """Return the waiting messages, front of the line first."""
@@ -302,26 +307,26 @@ class PriorityMessageQueue(BaseMessageQueue):
             priority: Priority level (lower number = higher priority).
 
         Returns:
-            The newly created message.
+            A copy of the newly created message.
 
         """
         msg = create_message(body, priority=priority)
         heapq.heappush(self._messages, (priority, self._counter, msg))
         self._counter += 1
-        return msg
+        return replace(msg)
 
     def get(self) -> Message | None:
         """Dequeue the highest-priority message and mark it as in-flight.
 
         Returns:
-            The highest-priority message, or None if the queue is empty.
+            A copy of the highest-priority message, or None if the queue is empty.
 
         """
         if not self._messages:
             return None
         _, _, msg = heapq.heappop(self._messages)
         self._in_flight[msg.id] = msg
-        return msg
+        return replace(msg)
 
     def _waiting(self) -> list[Message]:
         """Return the waiting messages, most urgent first, ties in arrival order."""
