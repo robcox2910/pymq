@@ -217,6 +217,58 @@ class TestBadFiles:
             save_queues([MessageQueue("q"), MessageQueue("q")], path)
         assert not path.exists()
 
+    def test_two_messages_with_one_id_are_refused(self, tmp_path: Path) -> None:
+        """A hand-edited file where two messages share an id raises PersistenceError.
+
+        The queue tracks a taken message by its id, so taking both and saving
+        again would quietly lose one of them.
+        """
+        path = tmp_path / "queues.json"
+        letter = {"id": "a", "body": "hi", "timestamp": "t", "priority": 0, "retries": 0}
+        path.write_text(
+            json.dumps(
+                {
+                    "queues": [
+                        {
+                            "name": "q",
+                            "kind": "fifo",
+                            "max_retries": 3,
+                            "waiting": [letter, {**letter, "body": "bye"}],
+                            "dead_letters": [],
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(PersistenceError, match=re.escape(str(path))):
+            load_queues(path)
+
+    def test_a_waiting_message_and_a_dead_letter_with_one_id_are_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """One id in both the waiting line and the dead letters is refused too."""
+        path = tmp_path / "queues.json"
+        letter = {"id": "a", "body": "hi", "timestamp": "t", "priority": 0, "retries": 0}
+        path.write_text(
+            json.dumps(
+                {
+                    "queues": [
+                        {
+                            "name": "q",
+                            "kind": "fifo",
+                            "max_retries": 3,
+                            "waiting": [letter],
+                            "dead_letters": [letter],
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(PersistenceError, match=re.escape(str(path))):
+            load_queues(path)
+
     def test_saved_file_is_readable_json(self, tmp_path: Path) -> None:
         """The save file is plain JSON a learner can open and read."""
         path = tmp_path / "queues.json"

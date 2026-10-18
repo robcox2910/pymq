@@ -79,7 +79,8 @@ def load_queues(filepath: str | Path) -> dict[str, BaseMessageQueue]:
 
     Raises:
         PersistenceError: If the file can't be read, isn't JSON, or isn't a
-            saved set of queues.
+            saved set of queues (two queues with one name, or two messages
+            in one queue with one id, are refused too).
 
     """
     path = Path(filepath)
@@ -130,12 +131,16 @@ def _queue_from(entry: object, path: Path) -> BaseMessageQueue:
     if not _is_int(max_retries) or cast("int", max_retries) < 0:
         msg = f"{path} is not a saved set of queues: queue {name!r} has a bad max_retries"
         raise PersistenceError(msg)
-    return _KINDS[kind].from_messages(
-        name,
-        cast("int", max_retries),
-        _messages_from(fields.get("waiting"), name, path),
-        _messages_from(fields.get("dead_letters"), name, path),
-    )
+    waiting = _messages_from(fields.get("waiting"), name, path)
+    dead_letters = _messages_from(fields.get("dead_letters"), name, path)
+    # The queue finds a taken message by its id, so two messages sharing one
+    # would collide: take both, save again, and one of them is gone.
+    ids = [msg.id for msg in [*waiting, *dead_letters]]
+    if len(set(ids)) != len(ids):
+        repeated = next(msg_id for msg_id in ids if ids.count(msg_id) > 1)
+        msg = f"{path} is not a saved set of queues: queue {name!r} has two messages with id {repeated!r}"
+        raise PersistenceError(msg)
+    return _KINDS[kind].from_messages(name, cast("int", max_retries), waiting, dead_letters)
 
 
 def _messages_from(saved: object, queue: str, path: Path) -> list[Message]:
