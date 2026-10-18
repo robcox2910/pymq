@@ -56,6 +56,7 @@ nav:
   - Saving Queues (Closing Up for the Night): concepts/saving.md
   - Slow Subscribers (The Overflowing Letterbox): concepts/slow-subscribers.md
   - Topics and Wildcards: concepts/topics-and-wildcards.md
+  - Property Testing (Every Letter Accounted For): property-testing.md
   # series-nav:start
   - The series:
       - Series home: https://robcox2910.github.io/

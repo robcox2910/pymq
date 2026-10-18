@@ -12,3 +12,4 @@ htmlcov/
 src/pymq/_version.py
 site/
 .superpowers/
+.hypothesis/
