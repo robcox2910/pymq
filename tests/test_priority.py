@@ -1,5 +1,7 @@
 """Test the PriorityMessageQueue for priority-based ordering."""
 
+import pytest
+
 from pymq.queue import PriorityMessageQueue
 
 HIGH_PRIORITY = 1
@@ -132,3 +134,9 @@ class TestPriorityQueueBasics:
         """Getting from an empty DLQ should return None."""
         q = PriorityMessageQueue("test")
         assert q.get_dead_letter() is None
+
+    @pytest.mark.parametrize("limit", [-1, True])
+    def test_bad_retry_limit_is_refused(self, limit: int) -> None:
+        """A retry limit below zero, or ``True``, is refused: it could never be loaded back."""
+        with pytest.raises(ValueError, match="max_retries"):
+            PriorityMessageQueue("q", max_retries=limit)

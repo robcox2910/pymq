@@ -21,7 +21,12 @@ class BaseMessageQueue(ABC):
 
     Args:
         name: Human-readable queue name.
-        max_retries: Maximum requeue attempts before dead-lettering.
+        max_retries: Maximum requeue attempts before dead-lettering
+            (a whole number, 0 or more).
+
+    Raises:
+        ValueError: If ``max_retries`` is below 0 or is ``True``/``False``.
+            A save file holding it could never be loaded back.
 
     """
 
@@ -32,6 +37,9 @@ class BaseMessageQueue(ABC):
 
     def __init__(self, name: str, max_retries: int = 3) -> None:
         """Create a new message queue."""
+        if isinstance(max_retries, bool) or max_retries < 0:
+            msg = f"max_retries must be a whole number, 0 or more, got {max_retries!r}"
+            raise ValueError(msg)
         self._name = name
         self._max_retries = max_retries
         self._in_flight: dict[str, Message] = {}

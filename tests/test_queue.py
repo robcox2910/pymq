@@ -1,5 +1,7 @@
 """Test the MessageQueue class for FIFO ordering, ack, reject, and DLQ."""
 
+import pytest
+
 from pymq.queue import MessageQueue
 
 MAX_RETRIES_DEFAULT = 3
@@ -189,3 +191,26 @@ class TestMessageQueueReject:
         msg_b = q.get()
         assert msg_b is not None
         assert msg_b.body == "b"
+
+
+class TestRetryLimit:
+    """The retry limit is a whole number, 0 or more."""
+
+    def test_negative_retry_limit_is_refused(self) -> None:
+        """A limit below zero is refused up front: a save file holding it could never be loaded.
+
+        Found by the save-and-load property, which shrank its failure to this:
+        an empty queue called "" with ``max_retries=-1`` saved fine, then
+        ``load_queues`` refused the file it had just written.
+        """
+        with pytest.raises(ValueError, match="max_retries"):
+            MessageQueue("", max_retries=-1)
+
+    def test_true_is_not_a_retry_limit(self) -> None:
+        """``True`` is refused too: it would be saved as ``true``, which isn't a number in JSON."""
+        with pytest.raises(ValueError, match="max_retries"):
+            MessageQueue("q", max_retries=True)
+
+    def test_zero_is_a_retry_limit(self) -> None:
+        """A limit of 0 is fine: the first rejection dead-letters the message."""
+        assert MessageQueue("q", max_retries=0).to_dict()["max_retries"] == 0

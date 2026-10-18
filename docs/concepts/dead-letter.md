@@ -31,11 +31,16 @@ q.reject(msg)  # too many retries -- moved to dead letter queue!
 dlq_msg = q.get_dead_letter()  # Retrieve from DLQ for inspection
 ```
 
+`max_retries` is a whole number, 0 or more. With 0, the first rejection
+sends a message straight to the dead letter queue. A negative limit
+raises `ValueError`, because it isn't a real setting.
+
 ## What We Test
 
 - Rejected messages are retried up to max_retries.
 - After max retries, messages move to the dead letter queue.
 - Dead letter messages can be retrieved for inspection.
+- A retry limit below zero is refused.
 
 ## What's Next?
 
