@@ -182,6 +182,22 @@ class TestBadFiles:
         with pytest.raises(PersistenceError, match=re.escape(str(path))):
             load_queues(path)
 
+    @pytest.mark.parametrize(
+        "content",
+        ["9" * 4301, "[" * 100_000],
+        ids=["number-too-long", "nested-too-deep"],
+    )
+    def test_json_too_big_to_read_is_refused(self, tmp_path: Path, content: str) -> None:
+        """A number over 4,300 digits, or lists nested 100,000 deep, raise PersistenceError.
+
+        Python's JSON reader gives up on these with a plain ValueError and a
+        RecursionError, which aren't the JSONDecodeError the loader expected.
+        """
+        path = tmp_path / "queues.json"
+        path.write_text(content, encoding="utf-8")
+        with pytest.raises(PersistenceError, match=re.escape(str(path))):
+            load_queues(path)
+
     def test_negative_retry_limit_is_refused(self, tmp_path: Path) -> None:
         """A retry limit below zero isn't a real setting."""
         path = tmp_path / "queues.json"

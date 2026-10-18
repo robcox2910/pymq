@@ -90,7 +90,9 @@ def load_queues(filepath: str | Path) -> dict[str, BaseMessageQueue]:
         raise PersistenceError(msg) from exc
     try:
         data: object = json.loads(raw)
-    except json.JSONDecodeError as exc:
+    except (ValueError, RecursionError) as exc:
+        # ValueError covers broken JSON (JSONDecodeError is one kind) and a
+        # number too long to read; RecursionError is lists nested too deep.
         msg = f"Invalid JSON in {path}: {exc}"
         raise PersistenceError(msg) from exc
 
