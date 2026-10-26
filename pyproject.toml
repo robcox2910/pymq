@@ -20,11 +20,8 @@ classifiers = [
 ]
 keywords = ["message-queue", "pubsub", "education"]
 dependencies = [
-    "pynet",
+    "fromscratch-pynet>=0.2.0",
 ]
-
-[tool.uv.sources]
-pynet = { git = "https://github.com/robcox2910/pynet", tag = "v0.1.1" }
 
 [project.scripts]
 pymq-broker = "pymq.broker.__main__:main"

@@ -235,7 +235,7 @@ wheels = [
 name = "fromscratch-pymq"
 source = { editable = "." }
 dependencies = [
-    { name = "pynet" },
+    { name = "fromscratch-pynet" },
 ]
 
 [package.optional-dependencies]
@@ -254,10 +254,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "commitizen", marker = "extra == 'dev'", specifier = ">=4.4.0" },
+    { name = "fromscratch-pynet", specifier = ">=0.2.0" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.170" },
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.10.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.0.1" },
-    { name = "pynet", git = "https://github.com/robcox2910/pynet?tag=v0.1.1" },
     { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1.400" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.4" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.0.0" },
@@ -265,6 +265,15 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9.3" },
 ]
 provides-extras = ["dev"]
+
+[[package]]
+name = "fromscratch-pynet"
+version = "0.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/70/ee/ae041491adb4ce50d19fbc3d572417151a4ddced76332030a306a7b99cc1/fromscratch_pynet-0.2.0.tar.gz", hash = "sha256:01a040ede10b56b7860e4034a4ee22942a8539ddb60512a77bbb1c99afc6888e", size = 281429, upload-time = "2026-10-26T11:54:50.064Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/78/2d/53b36eab586a75f972d4e277d91bc64802a0647c803d646ad1302c554e3c/fromscratch_pynet-0.2.0-py3-none-any.whl", hash = "sha256:6cf61a2c756ea17598c091dfc52a7c432a20cbb62a896f08909b1adff8812caa", size = 95331, upload-time = "2026-10-26T11:54:48.526Z" },
+]
 
 [[package]]
 name = "hypothesis"
@@ -632,11 +641,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/49/2e/ced460408999b33da
 wheels = [
     { url = "https://files.pythonhosted.org/packages/71/46/17f022dd3e953bf20a04a028a21ec746d942f8d2af30fa0f124fa0e6a684/pygments-2.21.0-py3-none-any.whl", hash = "sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9", size = 1250147, upload-time = "2026-08-17T08:02:44.912Z" },
 ]
-
-[[package]]
-name = "pynet"
-version = "0.1.1"
-source = { git = "https://github.com/robcox2910/pynet?tag=v0.1.1#824795ac00dddddad64621ab869a0a7b1f85befb" }
 
 [[package]]
 name = "pyparsing"
