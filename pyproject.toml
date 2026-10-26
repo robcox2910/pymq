@@ -1,5 +1,5 @@
 [project]
-name = "pymq"
+name = "fromscratch-pymq"
 dynamic = ["version"]
 description = "An educational message queue library built from scratch in Python"
 readme = "README.md"
