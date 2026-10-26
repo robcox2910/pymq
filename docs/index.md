@@ -86,6 +86,14 @@ PyNet's own event loop. Read these in order:
 Want to see it run? Try the scripts in the `examples/` folder, or start a
 broker with `pymq-broker`.
 
+## Install
+
+```bash
+pip install fromscratch-pymq
+```
+
+Or get the whole series at once with `pip install fromscratch-pystack`. To read the code or run the tests, clone it from [GitHub](https://github.com/robcox2910/pymq).
+
 ## Let's Start!
 
 Head to [Queues](concepts/queues.md) to learn how messages line up.
