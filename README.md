@@ -163,9 +163,10 @@ Runnable demos live in `examples/` (`broker_demo.py`, `work_queue.py`,
 
 ## Developing alongside a sibling
 
-PyMQ pins its sibling PyNet to a release tag in `pyproject.toml`
-(`[tool.uv.sources]`), and `uv.lock` records the exact commit. A change merged
-into PyNet can't affect PyMQ until PyMQ chooses to upgrade.
+PyMQ depends on its sibling PyNet as a PyPI package (`fromscratch-pynet` in
+`pyproject.toml`), and `uv.lock` records the exact release. A change merged
+into PyNet can't affect PyMQ until PyNet publishes a new release and PyMQ
+chooses to upgrade.
 
 To try an unreleased change from a PyNet checkout next to this one, install it
 over the pinned release:
