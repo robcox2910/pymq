@@ -1,4 +1,8 @@
-# What Is a Message Queue?
+---
+title: "Build your own message queue in Python"
+---
+
+# PyMQ: Build your own message queue in Python
 
 ## The Bakery Counter
 
